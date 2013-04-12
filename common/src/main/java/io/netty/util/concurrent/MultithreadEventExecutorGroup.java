@@ -16,6 +16,7 @@
 package io.netty.util.concurrent;
 
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Set;
 import java.util.concurrent.ThreadFactory;
@@ -28,31 +29,23 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public abstract class MultithreadEventExecutorGroup extends AbstractEventExecutorGroup {
 
-    public static final int DEFAULT_POOL_SIZE = Runtime.getRuntime().availableProcessors() * 2;
-    private static final AtomicInteger poolId = new AtomicInteger();
-
     private final EventExecutor[] children;
     private final AtomicInteger childIndex = new AtomicInteger();
 
     /**
      * Create a new instance.
      *
-     * @param nThreads          the number of threads that will be used by this instance. Use 0 for the default number
-     *                          of {@link #DEFAULT_POOL_SIZE}
+     * @param nThreads          the number of threads that will be used by this instance.
      * @param threadFactory     the ThreadFactory to use, or {@code null} if the default should be used.
      * @param args              arguments which will passed to each {@link #newChild(ThreadFactory, Object...)} call
      */
     protected MultithreadEventExecutorGroup(int nThreads, ThreadFactory threadFactory, Object... args) {
-        if (nThreads < 0) {
-            throw new IllegalArgumentException(String.format(
-                    "nThreads: %d (expected: >= 0)", nThreads));
+        if (nThreads <= 0) {
+            throw new IllegalArgumentException(String.format("nThreads: %d (expected: > 0)", nThreads));
         }
 
-        if (nThreads == 0) {
-            nThreads = DEFAULT_POOL_SIZE;
-        }
         if (threadFactory == null) {
-            threadFactory = new DefaultThreadFactory();
+            threadFactory = newDefaultThreadFactory();
         }
 
         children = new SingleThreadEventExecutor[nThreads];
@@ -74,9 +67,26 @@ public abstract class MultithreadEventExecutorGroup extends AbstractEventExecuto
         }
     }
 
+    protected ThreadFactory newDefaultThreadFactory() {
+        return new DefaultThreadFactory(getClass());
+    }
+
     @Override
     public EventExecutor next() {
         return children[Math.abs(childIndex.getAndIncrement() % children.length)];
+    }
+
+    @Override
+    public Iterator<EventExecutor> iterator() {
+        return children().iterator();
+    }
+
+    /**
+     * Return the number of {@link EventExecutor} this implementation uses. This number is the maps
+     * 1:1 to the threads it use.
+     */
+    public final int executorCount() {
+        return children.length;
     }
 
     /**
@@ -143,32 +153,5 @@ public abstract class MultithreadEventExecutorGroup extends AbstractEventExecuto
             }
         }
         return isTerminated();
-    }
-
-    private final class DefaultThreadFactory implements ThreadFactory {
-        private final AtomicInteger nextId = new AtomicInteger();
-        private final String prefix;
-
-        DefaultThreadFactory() {
-            String typeName = MultithreadEventExecutorGroup.this.getClass().getSimpleName();
-            typeName = Character.toLowerCase(typeName.charAt(0)) + typeName.substring(1);
-            prefix = typeName + '-' + poolId.incrementAndGet() + '-';
-        }
-
-        @Override
-        public Thread newThread(Runnable r) {
-            Thread t = new Thread(r, prefix + nextId.incrementAndGet());
-            try {
-                if (t.isDaemon()) {
-                    t.setDaemon(false);
-                }
-                if (t.getPriority() != Thread.MAX_PRIORITY) {
-                    t.setPriority(Thread.MAX_PRIORITY);
-                }
-            } catch (Exception ignored) {
-                // Doesn't matter even if failed to set.
-            }
-            return t;
-        }
     }
 }

@@ -196,12 +196,14 @@ public class HashedWheelTimer implements Timer {
         wheel = createWheel(ticksPerWheel);
         mask = wheel.length - 1;
 
-        // Convert tickDuration to milliseconds.
-        this.tickDuration = tickDuration = unit.toMillis(tickDuration);
+        // Convert tickDuration to nanos.
+        this.tickDuration = unit.toNanos(tickDuration);
 
         // Prevent overflow.
-        if (tickDuration == Long.MAX_VALUE || tickDuration >= Long.MAX_VALUE / wheel.length) {
-            throw new IllegalArgumentException("tickDuration is too long: " + tickDuration + ' ' + unit);
+        if (this.tickDuration >= Long.MAX_VALUE / wheel.length) {
+            throw new IllegalArgumentException(String.format(
+                    "tickDuration: %d (expected: 0 < tickDuration in nanos < %d",
+                    tickDuration, Long.MAX_VALUE / wheel.length));
         }
 
         workerThread = threadFactory.newThread(worker);
@@ -300,7 +302,7 @@ public class HashedWheelTimer implements Timer {
 
     @Override
     public Timeout newTimeout(TimerTask task, long delay, TimeUnit unit) {
-        final long currentTime = System.currentTimeMillis();
+        final long currentTime = System.nanoTime();
 
         if (task == null) {
             throw new NullPointerException("task");
@@ -311,9 +313,9 @@ public class HashedWheelTimer implements Timer {
 
         start();
 
-        delay = unit.toMillis(delay);
-        HashedWheelTimeout timeout = new HashedWheelTimeout(task, currentTime + delay);
-        scheduleTimeout(timeout, delay);
+        long delayInNanos = unit.toNanos(delay);
+        HashedWheelTimeout timeout = new HashedWheelTimeout(task, currentTime + delayInNanos);
+        scheduleTimeout(timeout, delayInNanos);
         return timeout;
     }
 
@@ -339,7 +341,7 @@ public class HashedWheelTimer implements Timer {
             if (workerState.get() == WORKER_STATE_SHUTDOWN) {
                 throw new IllegalStateException("Cannot enqueue after shutdown");
             }
-            final int stopIndex = (int) ((wheelCursor + relativeIndex) & mask);
+            final int stopIndex = (int) (wheelCursor + relativeIndex & mask);
             timeout.stopIndex = stopIndex;
             timeout.remainingRounds = remainingRounds;
             wheel[stopIndex].add(timeout);
@@ -361,7 +363,7 @@ public class HashedWheelTimer implements Timer {
             List<HashedWheelTimeout> expiredTimeouts =
                     new ArrayList<HashedWheelTimeout>();
 
-            startTime = System.currentTimeMillis();
+            startTime = System.nanoTime();
             tick = 1;
 
             while (workerState.get() == WORKER_STATE_STARTED) {
@@ -444,7 +446,7 @@ public class HashedWheelTimer implements Timer {
             long deadline = startTime + tickDuration * tick;
 
             for (;;) {
-                final long currentTime = System.currentTimeMillis();
+                final long currentTime = System.nanoTime();
                 long sleepTimeMs = (deadline - currentTime + 999999) / 1000000;
 
                 if (sleepTimeMs <= 0) {
@@ -462,7 +464,7 @@ public class HashedWheelTimer implements Timer {
                 //
                 // See https://github.com/netty/netty/issues/356
                 if (PlatformDependent.isWindows()) {
-                    sleepTimeMs = (sleepTimeMs / 10) * 10;
+                    sleepTimeMs = sleepTimeMs / 10 * 10;
                 }
 
                 try {
@@ -539,7 +541,7 @@ public class HashedWheelTimer implements Timer {
 
         @Override
         public String toString() {
-            long currentTime = System.currentTimeMillis();
+            final long currentTime = System.nanoTime();
             long remaining = deadline - currentTime;
 
             StringBuilder buf = new StringBuilder(192);

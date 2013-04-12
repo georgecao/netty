@@ -261,6 +261,16 @@ public abstract class SingleThreadEventExecutor extends AbstractEventExecutor {
     }
 
     /**
+     * Return the number of tasks that are pending for processing.
+     *
+     * <strong>Be aware that this operation may be expensive as it depends on the internal implementation of the
+     * SingleThreadEventExecutor. So use it was care!</strong>
+     */
+    public final int pendingTasks() {
+        return taskQueue.size();
+    }
+
+    /**
      * Add a task to the task queue, or throws a {@link RejectedExecutionException} if this instance was shutdown
      * before.
      */

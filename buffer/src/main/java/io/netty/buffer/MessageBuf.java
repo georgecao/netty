@@ -26,18 +26,7 @@ import java.util.Queue;
 public interface MessageBuf<T> extends Buf, Queue<T> {
 
     /**
-     * Unfold the specified object if necessary, and then add the unfolded objects (or the specified object if
-     * unfonding was not necessary) to this buffer. If the specified object is an object array ({@code Object[]}),
-     * this method adds the elements of the array to this buffer until {@code null} is encountered.  If the specified
-     * object is {@code null}, nothing is added to this buffer.  Otherwise, the specified object is added to this
-     * buffer as-is.
-     *
-     * @return {@code true} if one or more messages were added to this buffer. {@code false} otherwise.
-     */
-    boolean unfoldAndAdd(Object o);
-
-    /**
-     * Drain the content of te {@link MessageBuf} to the given {@link Collection}.
+     * Drain the content of the {@link MessageBuf} to the given {@link Collection}.
      *
      * @param c         the {@link Collection} to drain the content to
      * @return number   the number of objects which was transfered
@@ -45,7 +34,7 @@ public interface MessageBuf<T> extends Buf, Queue<T> {
     int drainTo(Collection<? super T> c);
 
     /**
-     * Drain the content of te {@link MessageBuf} to the given {@link Collection}.
+     * Drain the content of the {@link MessageBuf} to the given {@link Collection}.
      *
      * @param c             the {@link Collection} to drain the content to
      * @param maxElements   the max number of elements to drain

@@ -29,14 +29,11 @@ import io.netty.channel.ChannelInboundMessageHandlerAdapter;
  * <pre>
  *     public class StringToIntegerDecoder extends
  *             {@link MessageToMessageDecoder}&lt;{@link String}&gt; {
- *         public StringToIntegerDecoder() {
- *             super(String.class);
- *         }
  *
  *         {@code @Override}
- *         public {@link Object} decode({@link ChannelHandlerContext} ctx, {@link String} message)
- *                 throws {@link Exception} {
- *             return message.length());
+ *         public void decode({@link ChannelHandlerContext} ctx, {@link String} message,
+ *                 {@link MessageBuf} out) throws {@link Exception} {
+ *             out.add(message.length());
  *         }
  *     }
  * </pre>
@@ -52,7 +49,16 @@ public abstract class MessageToMessageDecoder<I> extends ChannelInboundMessageHa
 
     @Override
     public final void messageReceived(ChannelHandlerContext ctx, I msg) throws Exception {
-        ctx.nextInboundMessageBuffer().unfoldAndAdd(decode(ctx, msg));
+        OutputMessageBuf out = OutputMessageBuf.get();
+        try {
+            decode(ctx, msg, out);
+        } catch (CodecException e) {
+            throw e;
+        } catch (Throwable cause) {
+            throw new DecoderException(cause);
+        } finally {
+            out.drainToNextInbound(ctx);
+        }
     }
 
     /**
@@ -61,9 +67,8 @@ public abstract class MessageToMessageDecoder<I> extends ChannelInboundMessageHa
      *
      * @param ctx           the {@link ChannelHandlerContext} which this {@link MessageToMessageDecoder} belongs to
      * @param msg           the message to decode to an other one
-     * @return message      the decoded message or {@code null} if more messages are needed be cause the implementation
-     *                      needs to do some kind of aggragation
+     * @param out           the {@link MessageBuf} to which decoded messages should be added
      * @throws Exception    is thrown if an error accour
      */
-    protected abstract Object decode(ChannelHandlerContext ctx, I msg) throws Exception;
+    protected abstract void decode(ChannelHandlerContext ctx, I msg, MessageBuf<Object> out) throws Exception;
 }

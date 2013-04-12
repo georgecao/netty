@@ -16,11 +16,11 @@
 package io.netty.handler.codec.spdy;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelHandlerUtil;
 import io.netty.channel.ChannelInboundByteHandler;
+import io.netty.channel.ChannelInboundByteHandlerAdapter;
 import io.netty.channel.ChannelInboundMessageHandler;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.HttpObjectAggregator;
@@ -35,7 +35,7 @@ import javax.net.ssl.SSLEngine;
  * HTTP or SPDY. This offers an easy way for users to support both at the same time while not care to
  * much about the low-level details.
  */
-public abstract class SpdyOrHttpChooser extends ChannelDuplexHandler implements ChannelInboundByteHandler {
+public abstract class SpdyOrHttpChooser extends ChannelInboundByteHandlerAdapter {
 
     // TODO: Replace with generic NPN handler
 
@@ -78,9 +78,9 @@ public abstract class SpdyOrHttpChooser extends ChannelDuplexHandler implements 
     }
 
     @Override
-    public void inboundBufferUpdated(ChannelHandlerContext ctx) throws Exception {
+    public void inboundBufferUpdated(ChannelHandlerContext ctx, ByteBuf in) throws Exception {
         if (initPipeline(ctx)) {
-            ctx.nextInboundByteBuffer().writeBytes(ctx.inboundByteBuffer());
+            ctx.nextInboundByteBuffer().writeBytes(in);
 
             // When we reached here we can remove this handler as its now clear what protocol we want to use
             // from this point on.
