@@ -24,11 +24,14 @@ import io.netty.buffer.Unpooled;
 import io.netty.util.DefaultAttributeMap;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.EventExecutorGroup;
+import io.netty.util.concurrent.Future;
+import io.netty.util.internal.PlatformDependent;
 
 import java.net.SocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import static io.netty.channel.DefaultChannelPipeline.*;
@@ -37,6 +40,8 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
 
     private static final int FLAG_REMOVED = 1;
     private static final int FLAG_FREED = 2;
+    private static final int FLAG_FREED_INBOUND = 4;
+    private static final int FLAG_FREED_OUTBOUND = 8;
 
     volatile DefaultChannelHandlerContext next;
     volatile DefaultChannelHandlerContext prev;
@@ -193,78 +198,87 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
         outMsgBuf = null;
     }
 
-    void forwardBufferContent(final DefaultChannelHandlerContext forwardPrev,
-                              final DefaultChannelHandlerContext forwardNext) {
-        boolean flush = false;
-        boolean inboundBufferUpdated = false;
-        if (hasOutboundByteBuffer() && outboundByteBuffer().isReadable()) {
-            ByteBuf forwardPrevBuf;
-            if (forwardPrev.hasOutboundByteBuffer()) {
-                forwardPrevBuf = forwardPrev.outboundByteBuffer();
-            } else {
-                forwardPrevBuf = forwardPrev.nextOutboundByteBuffer();
-            }
-            forwardPrevBuf.writeBytes(outboundByteBuffer());
-            flush = true;
-        }
-        if (hasOutboundMessageBuffer() && !outboundMessageBuffer().isEmpty()) {
-            MessageBuf<Object> forwardPrevBuf;
-            if (forwardPrev.hasOutboundMessageBuffer()) {
-                forwardPrevBuf = forwardPrev.outboundMessageBuffer();
-            } else {
-                forwardPrevBuf = forwardPrev.nextOutboundMessageBuffer();
-            }
-            if (outboundMessageBuffer().drainTo(forwardPrevBuf) > 0) {
+    void forwardBufferContentAndRemove(
+            final DefaultChannelHandlerContext forwardPrev, final DefaultChannelHandlerContext forwardNext) {
+        try {
+            boolean flush = false;
+            boolean inboundBufferUpdated = false;
+            if (hasOutboundByteBuffer() && outboundByteBuffer().isReadable()) {
+                ByteBuf forwardPrevBuf;
+                if (forwardPrev.hasOutboundByteBuffer()) {
+                    forwardPrevBuf = forwardPrev.outboundByteBuffer();
+                } else {
+                    forwardPrevBuf = forwardPrev.nextOutboundByteBuffer();
+                }
+                forwardPrevBuf.writeBytes(outboundByteBuffer());
                 flush = true;
             }
-        }
-        if (hasInboundByteBuffer() && inboundByteBuffer().isReadable()) {
-            ByteBuf forwardNextBuf;
-            if (forwardNext.hasInboundByteBuffer()) {
-                forwardNextBuf = forwardNext.inboundByteBuffer();
-            } else {
-                forwardNextBuf = forwardNext.nextInboundByteBuffer();
+            if (hasOutboundMessageBuffer() && !outboundMessageBuffer().isEmpty()) {
+                MessageBuf<Object> forwardPrevBuf;
+                if (forwardPrev.hasOutboundMessageBuffer()) {
+                    forwardPrevBuf = forwardPrev.outboundMessageBuffer();
+                } else {
+                    forwardPrevBuf = forwardPrev.nextOutboundMessageBuffer();
+                }
+                if (outboundMessageBuffer().drainTo(forwardPrevBuf) > 0) {
+                    flush = true;
+                }
             }
-            forwardNextBuf.writeBytes(inboundByteBuffer());
-            inboundBufferUpdated = true;
-        }
-        if (hasInboundMessageBuffer() && !inboundMessageBuffer().isEmpty()) {
-            MessageBuf<Object> forwardNextBuf;
-            if (forwardNext.hasInboundMessageBuffer()) {
-                forwardNextBuf = forwardNext.inboundMessageBuffer();
-            } else {
-                forwardNextBuf = forwardNext.nextInboundMessageBuffer();
-            }
-            if (inboundMessageBuffer().drainTo(forwardNextBuf) > 0) {
+            if (hasInboundByteBuffer() && inboundByteBuffer().isReadable()) {
+                ByteBuf forwardNextBuf;
+                if (forwardNext.hasInboundByteBuffer()) {
+                    forwardNextBuf = forwardNext.inboundByteBuffer();
+                } else {
+                    forwardNextBuf = forwardNext.nextInboundByteBuffer();
+                }
+                forwardNextBuf.writeBytes(inboundByteBuffer());
                 inboundBufferUpdated = true;
             }
-        }
-        if (flush) {
-            EventExecutor executor = executor();
-            Thread currentThread = Thread.currentThread();
-            if (executor.inEventLoop(currentThread)) {
-                invokePrevFlush(newPromise(), currentThread, findContextOutboundInclusive(forwardPrev));
-            } else {
-                executor.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        invokePrevFlush(newPromise(), Thread.currentThread(),
-                                findContextOutboundInclusive(forwardPrev));
-                    }
-                });
+            if (hasInboundMessageBuffer() && !inboundMessageBuffer().isEmpty()) {
+                MessageBuf<Object> forwardNextBuf;
+                if (forwardNext.hasInboundMessageBuffer()) {
+                    forwardNextBuf = forwardNext.inboundMessageBuffer();
+                } else {
+                    forwardNextBuf = forwardNext.nextInboundMessageBuffer();
+                }
+                if (inboundMessageBuffer().drainTo(forwardNextBuf) > 0) {
+                    inboundBufferUpdated = true;
+                }
             }
-        }
-        if (inboundBufferUpdated) {
-            EventExecutor executor = executor();
-            if (executor.inEventLoop()) {
-                fireInboundBufferUpdated0(findContextInboundInclusive(forwardNext));
-            } else {
-                executor.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        fireInboundBufferUpdated0(findContextInboundInclusive(forwardNext));
-                    }
-                });
+            if (flush) {
+                EventExecutor executor = executor();
+                Thread currentThread = Thread.currentThread();
+                if (executor.inEventLoop(currentThread)) {
+                    invokePrevFlush(newPromise(), currentThread, findContextOutboundInclusive(forwardPrev));
+                } else {
+                    executor.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            invokePrevFlush(newPromise(), Thread.currentThread(),
+                                    findContextOutboundInclusive(forwardPrev));
+                        }
+                    });
+                }
+            }
+            if (inboundBufferUpdated) {
+                EventExecutor executor = executor();
+                if (executor.inEventLoop()) {
+                    fireInboundBufferUpdated0(findContextInboundInclusive(forwardNext));
+                } else {
+                    executor.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            fireInboundBufferUpdated0(findContextInboundInclusive(forwardNext));
+                        }
+                    });
+                }
+            }
+        } finally {
+            flags |= FLAG_REMOVED;
+
+            // Free all buffers before completing removal.
+            if (!channel.isRegistered()) {
+                freeHandlerBuffersAfterRemoval();
             }
         }
     }
@@ -300,17 +314,42 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
 
     void initHeadHandler() {
         // Must be called for the head handler.
-        HeadHandler h = (HeadHandler) handler;
-        if (h.initialized) {
-            return;
+        EventExecutor executor = executor();
+        if (executor.inEventLoop()) {
+            HeadHandler h = (HeadHandler) handler;
+            if (h.initialized) {
+                return;
+            }
+
+            h.init(this);
+            h.initialized = true;
+            outByteBuf = h.byteSink;
+            outMsgBuf = h.msgSink;
+        } else {
+            Future<?> f = executor.submit(new Runnable() {
+                @Override
+                public void run() {
+                    initHeadHandler();
+                }
+            });
+
+            boolean interrupted = false;
+            try {
+                while (!f.isDone()) {
+                    try {
+                        f.get();
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    } catch (ExecutionException e) {
+                        PlatformDependent.throwException(e);
+                    }
+                }
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
         }
-
-        assert executor().inEventLoop();
-
-        h.init(this);
-        h.initialized = true;
-        outByteBuf = h.byteSink;
-        outMsgBuf = h.msgSink;
     }
 
     private boolean flushInboundBridge() {
@@ -391,21 +430,10 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
         return nextBufferHadEnoughRoom;
     }
 
-    void setRemoved() {
-        flags |= FLAG_REMOVED;
-
-        // Free all buffers before completing removal.
-        if (!channel.isRegistered()) {
-            freeHandlerBuffersAfterRemoval();
-        }
-    }
-
     private void freeHandlerBuffersAfterRemoval() {
-        if (flags == FLAG_REMOVED) { // Removed, but not freed yet
-            flags |= FLAG_FREED;
-
+        int flags = this.flags;
+        if ((flags & FLAG_REMOVED) != 0 && (flags & FLAG_FREED) == 0) { // Removed, but not freed yet
             final ChannelHandler handler = handler();
-
             try {
                 if (handler instanceof ChannelInboundHandler) {
                     try {
@@ -428,12 +456,19 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     }
 
     private void free() {
+        flags |= FLAG_FREED;
         freeInbound();
         freeOutbound();
     }
 
+    private boolean isInboundFreed() {
+        return (flags & FLAG_FREED_INBOUND) != 0;
+    }
+
     private void freeInbound() {
         // Release the bridge feeder
+        flags |= FLAG_FREED_INBOUND;
+
         NextBridgeFeeder feeder;
         feeder = nextInBridgeFeeder;
         if (feeder != null) {
@@ -451,8 +486,14 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
         }
     }
 
+    private boolean isOutboundFreed() {
+        return (flags & FLAG_FREED_OUTBOUND) != 0;
+    }
+
     private void freeOutbound() {
         // Release the bridge feeder
+        flags |= FLAG_FREED_OUTBOUND;
+
         NextBridgeFeeder feeder = nextOutBridgeFeeder;
         if (feeder != null) {
             feeder.release();
@@ -691,7 +732,7 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     public ChannelHandlerContext fireChannelUnregistered() {
         final DefaultChannelHandlerContext next = findContextInbound();
         EventExecutor executor = next.executor();
-        if (prev != null && executor.inEventLoop()) {
+        if (executor.inEventLoop()) {
             next.invokeChannelUnregistered();
         } else {
             executor.execute(new Runnable() {
@@ -743,7 +784,7 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     public ChannelHandlerContext fireChannelInactive() {
         final DefaultChannelHandlerContext next = findContextInbound();
         EventExecutor executor = next.executor();
-        if (prev != null && executor.inEventLoop()) {
+        if (executor.inEventLoop()) {
             next.invokeChannelInactive();
         } else {
             executor.execute(new Runnable() {
@@ -778,7 +819,7 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
 
     private void invokeExceptionCaught(final Throwable cause) {
         EventExecutor executor = executor();
-        if (prev != null && executor.inEventLoop()) {
+        if (executor.inEventLoop()) {
             invokeExceptionCaught0(cause);
         } else {
             try {
@@ -866,32 +907,21 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     }
 
     private void fireInboundBufferUpdated0(final DefaultChannelHandlerContext next) {
-        if (!pipeline.isInboundShutdown()) {
-            feedNextInBridge();
-            // This comparison is safe because this method is always executed from the executor.
-            if (next.executor == executor) {
-                next.invokeInboundBufferUpdated();
-            } else {
-                Runnable task = next.invokeInboundBufferUpdatedTask;
-                if (task == null) {
-                    next.invokeInboundBufferUpdatedTask = task = new Runnable() {
-                        @Override
-                        public void run() {
-                            if (pipeline.isInboundShutdown()) {
-                                return;
-                            }
-
-                            if (findContextInbound() == next) {
-                                next.invokeInboundBufferUpdated();
-                            } else {
-                                // Pipeline changed since the task was submitted; try again.
-                                fireInboundBufferUpdated0(next);
-                            }
-                        }
-                    };
-                }
-                next.executor().execute(task);
+        feedNextInBridge();
+        // This comparison is safe because this method is always executed from the executor.
+        if (next.executor == executor) {
+            next.invokeInboundBufferUpdated();
+        } else {
+            Runnable task = next.invokeInboundBufferUpdatedTask;
+            if (task == null) {
+                next.invokeInboundBufferUpdatedTask = task = new Runnable() {
+                    @Override
+                    public void run() {
+                        next.invokeInboundBufferUpdated();
+                    }
+                };
             }
+            next.executor().execute(task);
         }
     }
 
@@ -903,8 +933,11 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     }
 
     private void invokeInboundBufferUpdated() {
-        ChannelStateHandler handler = (ChannelStateHandler) handler();
+        if (isInboundFreed()) {
+            return;
+        }
 
+        ChannelStateHandler handler = (ChannelStateHandler) handler();
         if (handler instanceof ChannelInboundHandler) {
             for (;;) {
                 try {
@@ -916,16 +949,14 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
                 } catch (Throwable t) {
                     notifyHandlerException(t);
                 } finally {
-                    if ((flags & FLAG_FREED) == 0) {
-                        if (handler instanceof ChannelInboundByteHandler && !pipeline.isInboundShutdown()) {
-                            try {
-                                ((ChannelInboundByteHandler) handler).discardInboundReadBytes(this);
-                            } catch (Throwable t) {
-                                notifyHandlerException(t);
-                            }
+                    if (handler instanceof ChannelInboundByteHandler && !isInboundFreed()) {
+                        try {
+                            ((ChannelInboundByteHandler) handler).discardInboundReadBytes(this);
+                        } catch (Throwable t) {
+                            notifyHandlerException(t);
                         }
-                        freeHandlerBuffersAfterRemoval();
                     }
+                    freeHandlerBuffersAfterRemoval();
                 }
             }
         } else {
@@ -949,12 +980,7 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
                 next.invokeChannelReadSuspendedTask = task = new Runnable() {
                     @Override
                     public void run() {
-                        if (findContextInbound() == next) {
-                            next.invokeChannelReadSuspended();
-                        } else {
-                            // Pipeline changed since the task was submitted; try again.
-                            fireChannelReadSuspended();
-                        }
+                        next.invokeChannelReadSuspended();
                     }
                 };
             }
@@ -1245,11 +1271,6 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     }
 
     private void invokePrevFlush(ChannelPromise promise, Thread currentThread, DefaultChannelHandlerContext prev) {
-        if (pipeline.isOutboundShutdown()) {
-            promise.setFailure(new ChannelPipelineException(
-                    "Unable to flush as outbound buffer of next handler was freed already"));
-            return;
-        }
         feedNextOutBridge();
         prev.invokeFlush(promise, currentThread);
     }
@@ -1278,8 +1299,14 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     }
 
     private void invokeFlush0(ChannelPromise promise) {
+        if (isOutboundFreed()) {
+            promise.setFailure(new ChannelPipelineException(
+                    "Unable to flush as outbound buffer of next handler was freed already"));
+            return;
+        }
+
         Channel channel = channel();
-        if (!channel.isRegistered() && !channel.isActive()) {
+        if (!channel.isActive() && !channel.isRegistered()) {
             promise.setFailure(new ClosedChannelException());
             return;
         }
@@ -1294,7 +1321,7 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
         } catch (Throwable t) {
             notifyHandlerException(t);
         } finally {
-            if (handler instanceof ChannelOutboundByteHandler && !pipeline.isOutboundShutdown()) {
+            if (handler instanceof ChannelOutboundByteHandler && !isOutboundFreed()) {
                 try {
                     ((ChannelOutboundByteHandler) handler).discardOutboundReadBytes(this);
                 } catch (Throwable t) {
@@ -1416,7 +1443,7 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
             return;
         }
 
-        if (pipeline.isOutboundShutdown()) {
+        if (isOutboundFreed()) {
             promise.setFailure(new ChannelPipelineException(
                     "Unable to write as outbound buffer of next handler was freed already"));
             return;
@@ -1425,20 +1452,23 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
             outboundMessageBuffer().add(message);
         } else {
             ByteBuf buf = (ByteBuf) message;
-            outboundByteBuffer().writeBytes(buf, buf.readerIndex(), buf.readableBytes());
+            try {
+                outboundByteBuffer().writeBytes(buf, buf.readerIndex(), buf.readableBytes());
+            } finally {
+                buf.release();
+            }
         }
         invokeFlush0(promise);
     }
 
     void invokeFreeInboundBuffer() {
         EventExecutor executor = executor();
-        if (prev != null && executor.inEventLoop()) {
+        if (executor.inEventLoop()) {
             invokeFreeInboundBuffer0();
         } else {
             executor.execute(new Runnable() {
                 @Override
                 public void run() {
-                    pipeline.shutdownInbound();
                     invokeFreeInboundBuffer0();
                 }
             });
@@ -1447,15 +1477,14 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
 
     private void invokeFreeInboundBuffer0() {
         ChannelHandler handler = handler();
-        if (handler instanceof ChannelInboundHandler) {
-            ChannelInboundHandler h = (ChannelInboundHandler) handler;
-            try {
-                h.freeInboundBuffer(this);
-            } catch (Throwable t) {
-                notifyHandlerException(t);
-            } finally {
-                freeInbound();
+        try {
+            if (handler instanceof ChannelInboundHandler) {
+                ((ChannelInboundHandler) handler).freeInboundBuffer(this);
             }
+        } catch (Throwable t) {
+            notifyHandlerException(t);
+        } finally {
+            freeInbound();
         }
 
         if (next != null) {
@@ -1472,13 +1501,11 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
         EventExecutor executor = executor();
         if (next == null) {
             if (executor.inEventLoop()) {
-                pipeline.shutdownOutbound();
                 invokeFreeOutboundBuffer0();
             } else {
                 executor.execute(new Runnable() {
                     @Override
                     public void run() {
-                        pipeline.shutdownOutbound();
                         invokeFreeOutboundBuffer0();
                     }
                 });
@@ -1499,15 +1526,14 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
 
     private void invokeFreeOutboundBuffer0() {
         ChannelHandler handler = handler();
-        if (handler instanceof ChannelOutboundHandler) {
-            ChannelOutboundHandler h = (ChannelOutboundHandler) handler;
-            try {
-                h.freeOutboundBuffer(this);
-            } catch (Throwable t) {
-                notifyHandlerException(t);
-            } finally {
-                freeOutbound();
+        try {
+            if (handler instanceof ChannelOutboundHandler) {
+                ((ChannelOutboundHandler) handler).freeOutboundBuffer(this);
             }
+        } catch (Throwable t) {
+            notifyHandlerException(t);
+        } finally {
+            freeOutbound();
         }
 
         if (prev != null) {
@@ -1525,11 +1551,7 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
             return;
         }
 
-        if (handler() instanceof ChannelStateHandler) {
-            invokeExceptionCaught(cause);
-        } else {
-            findContextInbound().invokeExceptionCaught(cause);
-        }
+        invokeExceptionCaught(cause);
     }
 
     private static boolean inExceptionCaught(Throwable cause) {
@@ -1555,6 +1577,11 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     @Override
     public ChannelPromise newPromise() {
         return new DefaultChannelPromise(channel(), executor());
+    }
+
+    @Override
+    public ChannelProgressivePromise newProgressivePromise() {
+        return new DefaultChannelProgressivePromise(channel(), executor());
     }
 
     @Override

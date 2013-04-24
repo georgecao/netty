@@ -82,11 +82,6 @@ public class DefaultChannelPromise extends DefaultPromise<Void> implements Chann
     }
 
     @Override
-    public boolean trySuccess(Void result) {
-        return super.trySuccess(result);
-    }
-
-    @Override
     public ChannelPromise setFailure(Throwable cause) {
         super.setFailure(cause);
         return this;

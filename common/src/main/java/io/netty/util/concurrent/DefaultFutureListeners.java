@@ -13,25 +13,32 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
-
 package io.netty.util.concurrent;
 
 import java.util.Arrays;
-import java.util.EventListener;
 
-final class DefaultPromiseListeners {
+public final class DefaultFutureListeners {
+
     private GenericFutureListener<? extends Future<?>>[] listeners;
     private int size;
+    private int progressiveSize; // the number of progressive listeners
 
     @SuppressWarnings("unchecked")
-    DefaultPromiseListeners(GenericFutureListener<? extends Future<?>> firstListener,
-                            GenericFutureListener<? extends Future<?>> secondListener) {
-
-        listeners = new GenericFutureListener[] { firstListener, secondListener };
+    public DefaultFutureListeners(
+            GenericFutureListener<? extends Future<?>> first, GenericFutureListener<? extends Future<?>> second) {
+        listeners = new GenericFutureListener[2];
+        listeners[0] = first;
+        listeners[1] = second;
         size = 2;
+        if (first instanceof GenericProgressiveFutureListener) {
+            progressiveSize ++;
+        }
+        if (second instanceof GenericProgressiveFutureListener) {
+            progressiveSize ++;
+        }
     }
 
-    void add(GenericFutureListener<? extends Future<?>> l) {
+    public void add(GenericFutureListener<? extends Future<?>> l) {
         GenericFutureListener<? extends Future<?>>[] listeners = this.listeners;
         final int size = this.size;
         if (size == listeners.length) {
@@ -39,10 +46,14 @@ final class DefaultPromiseListeners {
         }
         listeners[size] = l;
         this.size = size + 1;
+
+        if (l instanceof GenericProgressiveFutureListener) {
+            progressiveSize ++;
+        }
     }
 
-    void remove(EventListener l) {
-        final EventListener[] listeners = this.listeners;
+    public void remove(GenericFutureListener<? extends Future<?>> l) {
+        final GenericFutureListener<? extends Future<?>>[] listeners = this.listeners;
         int size = this.size;
         for (int i = 0; i < size; i ++) {
             if (listeners[i] == l) {
@@ -52,16 +63,24 @@ final class DefaultPromiseListeners {
                 }
                 listeners[-- size] = null;
                 this.size = size;
+
+                if (l instanceof GenericProgressiveFutureListener) {
+                    progressiveSize --;
+                }
                 return;
             }
         }
     }
 
-    GenericFutureListener<? extends Future<?>>[] listeners() {
+    public GenericFutureListener<? extends Future<?>>[] listeners() {
         return listeners;
     }
 
-    int size() {
+    public int size() {
         return size;
+    }
+
+    public int progressiveSize() {
+        return progressiveSize;
     }
 }

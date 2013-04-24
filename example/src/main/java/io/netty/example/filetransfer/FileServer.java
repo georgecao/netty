@@ -22,8 +22,12 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundMessageHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.ChannelProgressiveFuture;
+import io.netty.channel.ChannelProgressiveFutureListener;
+import io.netty.channel.ChannelProgressivePromise;
 import io.netty.channel.DefaultFileRegion;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.FileRegion;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
@@ -101,7 +105,21 @@ public class FileServer {
                     return;
                 }
                 ctx.write(file + " " + file.length() + '\n');
-                ctx.sendFile(new DefaultFileRegion(new FileInputStream(file).getChannel(), 0, file.length()));
+                FileRegion region = new DefaultFileRegion(new FileInputStream(file).getChannel(), 0, file.length());
+                ChannelProgressivePromise promise = ctx.newProgressivePromise();
+                promise.addListener(new ChannelProgressiveFutureListener() {
+                    @Override
+                    public void operationProgressed(ChannelProgressiveFuture f, long progress, long total) {
+                        System.err.println("progress: " + progress + " / " + total);
+                    }
+
+                    @Override
+                    public void operationComplete(ChannelProgressiveFuture future) {
+                        System.err.println("file transfer complete");
+                    }
+                });
+
+                ctx.sendFile(region, promise);
                 ctx.write("\n");
             } else {
                 ctx.write("File not found: " + file + '\n');

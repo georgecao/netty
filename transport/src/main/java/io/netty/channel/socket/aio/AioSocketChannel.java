@@ -23,6 +23,7 @@ import io.netty.channel.ChannelFlushPromiseNotifier;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelMetadata;
 import io.netty.channel.ChannelPipeline;
+import io.netty.channel.ChannelProgressivePromise;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoop;
 import io.netty.channel.FileRegion;
@@ -561,6 +562,10 @@ public class AioSocketChannel extends AbstractAioChannel implements SocketChanne
                             return;
                         }
                         written += result;
+
+                        if (promise instanceof ChannelProgressivePromise) {
+                            ((ChannelProgressivePromise) promise).setProgress(written, region.count());
+                        }
 
                         if (written >= region.count()) {
                             region.release();

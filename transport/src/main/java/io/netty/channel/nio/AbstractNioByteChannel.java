@@ -19,6 +19,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
+import io.netty.channel.ChannelProgressivePromise;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.FileRegion;
 import io.netty.channel.socket.ChannelInputShutdownEvent;
@@ -185,6 +186,9 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                         return;
                     } else {
                         writtenBytes += localWrittenBytes;
+                        if (promise instanceof ChannelProgressivePromise) {
+                            ((ChannelProgressivePromise) promise).setProgress(writtenBytes, region.count());
+                        }
                         if (writtenBytes >= region.count()) {
                             region.release();
                             promise.setSuccess();

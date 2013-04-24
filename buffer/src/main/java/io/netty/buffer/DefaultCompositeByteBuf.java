@@ -16,6 +16,7 @@
 package io.netty.buffer;
 
 import io.netty.util.ResourceLeak;
+import io.netty.util.internal.EmptyArrays;
 import io.netty.util.internal.PlatformDependent;
 
 import java.io.IOException;
@@ -40,12 +41,9 @@ import java.util.Queue;
  * is recommended to use {@link Unpooled#wrappedBuffer(ByteBuf...)}
  * instead of calling the constructor explicitly.
  */
-public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
-        implements CompositeByteBuf {
+public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf implements CompositeByteBuf {
 
-    private static final ByteBuffer[] EMPTY_NIOBUFFERS = new ByteBuffer[0];
-
-    private final ResourceLeak leak = leakDetector.open(this);
+    private final ResourceLeak leak;
     private final ByteBufAllocator alloc;
     private final boolean direct;
     private final List<Component> components = new ArrayList<Component>();
@@ -64,6 +62,7 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
         this.alloc = alloc;
         this.direct = direct;
         this.maxNumComponents = maxNumComponents;
+        leak = leakDetector.open(this);
     }
 
     public DefaultCompositeByteBuf(ByteBufAllocator alloc, boolean direct, int maxNumComponents, ByteBuf... buffers) {
@@ -83,6 +82,7 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
         addComponents0(0, buffers);
         consolidateIfNeeded();
         setIndex(0, capacity());
+        leak = leakDetector.open(this);
     }
 
     public DefaultCompositeByteBuf(
@@ -102,6 +102,7 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
         addComponents0(0, buffers);
         consolidateIfNeeded();
         setIndex(0, capacity());
+        leak = leakDetector.open(this);
     }
 
     @Override
@@ -137,12 +138,6 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
 
         if (buffer == null) {
             throw new NullPointerException("buffer");
-        }
-
-        if (buffer instanceof Iterable) {
-            @SuppressWarnings("unchecked")
-            Iterable<ByteBuf> composite = (Iterable<ByteBuf>) buffer;
-            return addComponents0(cIndex, composite);
         }
 
         int readableBytes = buffer.readableBytes();
@@ -223,52 +218,21 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
             throw new NullPointerException("buffers");
         }
 
-        if (buffers instanceof DefaultCompositeByteBuf) {
-            DefaultCompositeByteBuf compositeBuf = (DefaultCompositeByteBuf) buffers;
-            List<Component> list = compositeBuf.components;
-            ByteBuf[] array = new ByteBuf[list.size()];
-            for (int i = 0; i < array.length; i ++) {
-                array[i] = list.get(i).buf.retain();
-            }
-            compositeBuf.release();
-            return addComponents0(cIndex, array);
+        if (buffers instanceof ByteBuf) {
+            // If buffers also implements ByteBuf (e.g. CompositeByteBuf), it has to go to addComponent(ByteBuf).
+            return addComponent0(cIndex, (ByteBuf) buffers);
         }
 
-        if (buffers instanceof CompositeByteBuf) {
-            CompositeByteBuf compositeBuf = (CompositeByteBuf) buffers;
-            final int nComponents = compositeBuf.numComponents();
-            ByteBuf[] array = new ByteBuf[nComponents];
-            for (int i = 0; i < nComponents; i ++) {
-                array[i] = compositeBuf.component(i).retain();
+        if (!(buffers instanceof Collection)) {
+            List<ByteBuf> list = new ArrayList<ByteBuf>();
+            for (ByteBuf b: buffers) {
+                list.add(b);
             }
-            compositeBuf.release();
-            return addComponents0(cIndex, array);
+            buffers = list;
         }
 
-        if (buffers instanceof List) {
-            List<ByteBuf> list = (List<ByteBuf>) buffers;
-            ByteBuf[] array = new ByteBuf[list.size()];
-            for (int i = 0; i < array.length; i ++) {
-                array[i] = list.get(i);
-            }
-            return addComponents0(cIndex, array);
-        }
-
-        if (buffers instanceof Collection) {
-            Collection<ByteBuf> col = (Collection<ByteBuf>) buffers;
-            ByteBuf[] array = new ByteBuf[col.size()];
-            int i = 0;
-            for (ByteBuf b: col) {
-                array[i ++] = b;
-            }
-            return addComponents0(cIndex, array);
-        }
-
-        List<ByteBuf> list = new ArrayList<ByteBuf>();
-        for (ByteBuf b: buffers) {
-            list.add(b);
-        }
-        return addComponents0(cIndex, list.toArray(new ByteBuf[list.size()]));
+        Collection<ByteBuf> col = (Collection<ByteBuf>) buffers;
+        return addComponents0(cIndex, col.toArray(new ByteBuf[col.size()]));
     }
 
     /**
@@ -319,7 +283,6 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
     }
 
     private void updateComponentOffsets(int cIndex) {
-
         Component c = components.get(cIndex);
         lastAccessed = c;
         lastAccessedId = cIndex;
@@ -341,7 +304,7 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
     @Override
     public CompositeByteBuf removeComponent(int cIndex) {
         checkComponentIndex(cIndex);
-        components.remove(cIndex);
+        components.remove(cIndex).freeIfNecessary();
         updateComponentOffsets(cIndex);
         return this;
     }
@@ -349,7 +312,13 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
     @Override
     public CompositeByteBuf removeComponents(int cIndex, int numComponents) {
         checkComponentIndex(cIndex, numComponents);
-        components.subList(cIndex, cIndex + numComponents).clear();
+
+        List<Component> toRemove = components.subList(cIndex, cIndex + numComponents);
+        for (Component c: toRemove) {
+            c.freeIfNecessary();
+        }
+        toRemove.clear();
+
         updateComponentOffsets(cIndex);
         return this;
     }
@@ -1079,7 +1048,7 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
     public ByteBuffer[] nioBuffers(int index, int length) {
         checkIndex(index, length);
         if (length == 0) {
-            return EMPTY_NIOBUFFERS;
+            return EmptyArrays.EMPTY_BYTE_BUFFERS;
         }
 
         List<ByteBuffer> buffers = new ArrayList<ByteBuffer>(components.size());
@@ -1089,7 +1058,16 @@ public class DefaultCompositeByteBuf extends AbstractReferenceCountedByteBuf
             ByteBuf s = c.buf;
             int adjustment = c.offset;
             int localLength = Math.min(length, s.capacity() - (index - adjustment));
-            buffers.add(s.nioBuffer(index - adjustment, localLength));
+            switch (s.nioBufferCount()) {
+                case 0:
+                    throw new UnsupportedOperationException();
+                case 1:
+                    buffers.add(s.nioBuffer(index - adjustment, localLength));
+                    break;
+                default:
+                    Collections.addAll(buffers, s.nioBuffers(index - adjustment, localLength));
+            }
+
             index += localLength;
             length -= localLength;
             i ++;

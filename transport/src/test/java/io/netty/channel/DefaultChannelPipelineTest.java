@@ -329,7 +329,7 @@ public class DefaultChannelPipelineTest {
                 pipeline.context(handler1).inboundByteBuffer().writeLong(8);
                 assertEquals(8, pipeline.context(handler1).inboundByteBuffer().readableBytes());
                 assertEquals(0, pipeline.context(handler2).inboundByteBuffer().readableBytes());
-                pipeline.removeAndForward(handler1);
+                pipeline.remove(handler1);
                 assertEquals(8, pipeline.context(handler2).inboundByteBuffer().readableBytes());
                 latch.countDown();
             }
@@ -355,7 +355,7 @@ public class DefaultChannelPipelineTest {
             public void run() {
                 pipeline.context(handler1).inboundByteBuffer().writeLong(8);
                 assertEquals(8, pipeline.context(handler1).inboundByteBuffer().readableBytes());
-                pipeline.replaceAndForward(handler1, "handler2", handler2);
+                pipeline.replace(handler1, "handler2", handler2);
                 assertEquals(8, pipeline.context(handler2).inboundByteBuffer().readableBytes());
                 latch.countDown();
             }
@@ -383,7 +383,7 @@ public class DefaultChannelPipelineTest {
                 pipeline.context(handler2).outboundByteBuffer().writeLong(8);
                 assertEquals(8, pipeline.context(handler2).outboundByteBuffer().readableBytes());
                 assertEquals(0, pipeline.context(handler1).outboundByteBuffer().readableBytes());
-                pipeline.removeAndForward(handler2);
+                pipeline.remove(handler2);
                 assertEquals(8, pipeline.context(handler1).outboundByteBuffer().readableBytes());
                 latch.countDown();
             }
@@ -409,7 +409,7 @@ public class DefaultChannelPipelineTest {
             public void run() {
                 pipeline.context(handler1).outboundByteBuffer().writeLong(8);
                 assertEquals(8, pipeline.context(handler1).outboundByteBuffer().readableBytes());
-                pipeline.replaceAndForward(handler1, "handler2", handler2);
+                pipeline.replace(handler1, "handler2", handler2);
                 assertEquals(8, pipeline.context(handler2).outboundByteBuffer().readableBytes());
                 latch.countDown();
             }
@@ -439,7 +439,7 @@ public class DefaultChannelPipelineTest {
                 assertEquals(8, pipeline.context(handler1).outboundByteBuffer().readableBytes());
                 assertEquals(8, pipeline.context(handler1).inboundByteBuffer().readableBytes());
 
-                pipeline.replaceAndForward(handler1, "handler2", handler2);
+                pipeline.replace(handler1, "handler2", handler2);
                 assertEquals(8, pipeline.context(handler2).outboundByteBuffer().readableBytes());
                 assertEquals(8, pipeline.context(handler2).inboundByteBuffer().readableBytes());
 
@@ -479,7 +479,7 @@ public class DefaultChannelPipelineTest {
                 assertEquals(0, pipeline.context(handler1).outboundByteBuffer().readableBytes());
                 assertEquals(0, pipeline.context(handler3).inboundByteBuffer().readableBytes());
 
-                pipeline.removeAndForward(handler2);
+                pipeline.remove(handler2);
                 assertEquals(8, pipeline.context(handler1).outboundByteBuffer().readableBytes());
                 assertEquals(8, pipeline.context(handler3).inboundByteBuffer().readableBytes());
                 latch.countDown();
@@ -509,7 +509,7 @@ public class DefaultChannelPipelineTest {
                 pipeline.context(handler1).inboundMessageBuffer().add(new Object());
                 assertEquals(1, pipeline.context(handler1).inboundMessageBuffer().size());
                 assertEquals(0, pipeline.context(handler2).inboundMessageBuffer().size());
-                pipeline.removeAndForward(handler1);
+                pipeline.remove(handler1);
                 assertEquals(1, pipeline.context(handler2).inboundMessageBuffer().size());
                 latch.countDown();
             }
@@ -535,7 +535,7 @@ public class DefaultChannelPipelineTest {
             public void run() {
                 pipeline.context(handler1).inboundMessageBuffer().add(new Object());
                 assertEquals(1, pipeline.context(handler1).inboundMessageBuffer().size());
-                pipeline.replaceAndForward(handler1, "handler2", handler2);
+                pipeline.replace(handler1, "handler2", handler2);
                 assertEquals(1, pipeline.context(handler2).inboundMessageBuffer().size());
                 latch.countDown();
             }
@@ -563,7 +563,7 @@ public class DefaultChannelPipelineTest {
                 pipeline.context(handler2).outboundMessageBuffer().add(new Object());
                 assertEquals(1, pipeline.context(handler2).outboundMessageBuffer().size());
                 assertEquals(0, pipeline.context(handler1).outboundMessageBuffer().size());
-                pipeline.removeAndForward(handler2);
+                pipeline.remove(handler2);
                 assertEquals(1, pipeline.context(handler1).outboundMessageBuffer().size());
                 latch.countDown();
             }
@@ -589,7 +589,7 @@ public class DefaultChannelPipelineTest {
             public void run() {
                 pipeline.context(handler1).outboundMessageBuffer().add(new Object());
                 assertEquals(1, pipeline.context(handler1).outboundMessageBuffer().size());
-                pipeline.replaceAndForward(handler1, "handler2", handler2);
+                pipeline.replace(handler1, "handler2", handler2);
                 assertEquals(1, pipeline.context(handler2).outboundMessageBuffer().size());
                 latch.countDown();
             }
@@ -619,7 +619,7 @@ public class DefaultChannelPipelineTest {
                 assertEquals(1, pipeline.context(handler1).outboundMessageBuffer().size());
                 assertEquals(1, pipeline.context(handler1).inboundMessageBuffer().size());
 
-                pipeline.replaceAndForward(handler1, "handler2", handler2);
+                pipeline.replace(handler1, "handler2", handler2);
                 assertEquals(1, pipeline.context(handler2).outboundMessageBuffer().size());
                 assertEquals(1, pipeline.context(handler2).inboundMessageBuffer().size());
 
@@ -632,37 +632,53 @@ public class DefaultChannelPipelineTest {
         assertTrue(((ChannelOutboundMessageHandlerImpl) handler2.operationHandler()).flushed);
     }
 
-    @Test
-    public void testLifeCycleAware() {
+    @Test(timeout = 20000)
+    public void testLifeCycleAware() throws Exception {
         LocalChannel channel = new LocalChannel();
         LocalEventLoopGroup group = new LocalEventLoopGroup();
         group.register(channel).awaitUninterruptibly();
         final DefaultChannelPipeline pipeline = new DefaultChannelPipeline(channel);
 
-        List<LifeCycleAwareTestHandler> handlers = new ArrayList<LifeCycleAwareTestHandler>();
-
+        final List<LifeCycleAwareTestHandler> handlers = new ArrayList<LifeCycleAwareTestHandler>();
+        final CountDownLatch addLatch = new CountDownLatch(20);
         for (int i = 0; i < 20; i++) {
-            LifeCycleAwareTestHandler handler = new LifeCycleAwareTestHandler("handler-" + i);
+            final LifeCycleAwareTestHandler handler = new LifeCycleAwareTestHandler("handler-" + i);
 
             // Add handler.
             pipeline.addFirst(handler.name, handler);
+            channel.eventLoop().execute(new Runnable() {
+                @Override
+                public void run() {
+                    // Validate handler life-cycle methods called.
+                    handler.validate(true, false);
 
-            // Validate handler life-cycle methods called.
-            handler.validate(true, true, false, false);
+                    // Store handler into the list.
+                    handlers.add(handler);
 
-            // Store handler into the list.
-            handlers.add(handler);
+                    addLatch.countDown();
+                }
+            });
         }
+        addLatch.await();
 
         // Change the order of remove operations over all handlers in the pipeline.
         Collections.shuffle(handlers);
 
-        for (LifeCycleAwareTestHandler handler : handlers) {
+        final CountDownLatch removeLatch = new CountDownLatch(20);
+
+        for (final LifeCycleAwareTestHandler handler : handlers) {
             assertSame(handler, pipeline.remove(handler.name));
 
-            // Validate handler life-cycle methods called.
-            handler.validate(true, true, true, true);
+            channel.eventLoop().execute(new Runnable() {
+                @Override
+                public void run() {
+                    // Validate handler life-cycle methods called.
+                    handler.validate(true, true);
+                    removeLatch.countDown();
+                }
+            });
         }
+        removeLatch.await();
     }
 
     @Test
@@ -692,7 +708,7 @@ public class DefaultChannelPipelineTest {
                 assertEquals(0, pipeline.context(handler1).outboundMessageBuffer().size());
                 assertEquals(0, pipeline.context(handler3).inboundMessageBuffer().size());
 
-                pipeline.removeAndForward(handler2);
+                pipeline.remove(handler2);
                 assertEquals(1, pipeline.context(handler1).outboundMessageBuffer().size());
                 assertEquals(1, pipeline.context(handler3).inboundMessageBuffer().size());
                 latch.countDown();
@@ -888,9 +904,7 @@ public class DefaultChannelPipelineTest {
     private static final class LifeCycleAwareTestHandler extends ChannelHandlerAdapter {
         private final String name;
 
-        private boolean beforeAdd;
         private boolean afterAdd;
-        private boolean beforeRemove;
         private boolean afterRemove;
 
         /**
@@ -902,37 +916,21 @@ public class DefaultChannelPipelineTest {
             this.name = name;
         }
 
-        public void validate(boolean beforeAdd, boolean afterAdd, boolean beforeRemove, boolean afterRemove) {
-            assertEquals(name, beforeAdd, this.beforeAdd);
+        public void validate(boolean afterAdd, boolean afterRemove) {
             assertEquals(name, afterAdd, this.afterAdd);
-            assertEquals(name, beforeRemove, this.beforeRemove);
             assertEquals(name, afterRemove, this.afterRemove);
         }
 
         @Override
-        public void beforeAdd(ChannelHandlerContext ctx) {
-            validate(false, false, false, false);
-
-            beforeAdd = true;
-        }
-
-        @Override
-        public void afterAdd(ChannelHandlerContext ctx) {
-            validate(true, false, false, false);
+        public void handlerAdded(ChannelHandlerContext ctx) {
+            validate(false, false);
 
             afterAdd = true;
         }
 
         @Override
-        public void beforeRemove(ChannelHandlerContext ctx) {
-            validate(true, true, false, false);
-
-            beforeRemove = true;
-        }
-
-        @Override
-        public void afterRemove(ChannelHandlerContext ctx) {
-            validate(true, true, true, false);
+        public void handlerRemoved(ChannelHandlerContext ctx) {
+            validate(true, false);
 
             afterRemove = true;
         }

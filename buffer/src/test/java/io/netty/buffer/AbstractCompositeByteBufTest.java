@@ -20,17 +20,18 @@ import org.junit.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static io.netty.buffer.Unpooled.*;
+import static io.netty.util.internal.EmptyArrays.*;
+import static org.hamcrest.CoreMatchers.*;
 import static org.junit.Assert.*;
 
 /**
  * An abstract test class for composite channel buffers
  */
-@SuppressWarnings("ZeroLengthArrayAllocation")
-public abstract class AbstractCompositeByteBufTest extends
-        AbstractByteBufTest {
+public abstract class AbstractCompositeByteBufTest extends AbstractByteBufTest {
 
     private final ByteOrder order;
 
@@ -417,7 +418,7 @@ public abstract class AbstractCompositeByteBufTest extends
     public void testEmptyBuffer() {
         ByteBuf b = freeLater(wrappedBuffer(new byte[]{1, 2}, new byte[]{3, 4}));
         b.readBytes(new byte[4]);
-        b.readBytes(new byte[0]);
+        b.readBytes(EMPTY_BYTES);
     }
 
     // Test for https://github.com/netty/netty/issues/1060
@@ -429,5 +430,117 @@ public abstract class AbstractCompositeByteBufTest extends
             buf.writeByte(1);
             assertEquals(1, buf.readByte());
         }
+    }
+
+    @Test
+    public void testComponentMustBeSlice() {
+        CompositeByteBuf buf = freeLater(compositeBuffer());
+        buf.addComponent(buffer(4).setIndex(1, 3));
+        assertThat(buf.component(0), is(instanceOf(SlicedByteBuf.class)));
+        assertThat(buf.component(0).capacity(), is(2));
+        assertThat(buf.component(0).maxCapacity(), is(2));
+    }
+
+    @Test
+    public void testReferenceCounts1() {
+        ByteBuf c1 = buffer().writeByte(1);
+        ByteBuf c2 = buffer().writeByte(2).retain();
+        ByteBuf c3 = buffer().writeByte(3).retain(2);
+
+        CompositeByteBuf buf = freeLater(compositeBuffer());
+        assertThat(buf.refCnt(), is(1));
+        buf.addComponents(c1, c2, c3);
+
+        assertThat(buf.refCnt(), is(1));
+
+        // Ensure that c[123]'s refCount did not change.
+        assertThat(c1.refCnt(), is(1));
+        assertThat(c2.refCnt(), is(2));
+        assertThat(c3.refCnt(), is(3));
+
+        assertThat(buf.component(0).refCnt(), is(1));
+        assertThat(buf.component(1).refCnt(), is(2));
+        assertThat(buf.component(2).refCnt(), is(3));
+
+        c3.release(2);
+        c2.release();
+    }
+
+    @Test
+    public void testReferenceCounts2() {
+        ByteBuf c1 = buffer().writeByte(1);
+        ByteBuf c2 = buffer().writeByte(2).retain();
+        ByteBuf c3 = buffer().writeByte(3).retain(2);
+
+        CompositeByteBuf bufA = compositeBuffer();
+        bufA.addComponents(c1, c2, c3).writerIndex(3);
+
+        CompositeByteBuf bufB = compositeBuffer();
+        bufB.addComponents(bufA);
+
+        // Ensure that bufA.refCnt() did not change.
+        assertThat(bufA.refCnt(), is(1));
+
+        // Ensure that c[123]'s refCnt did not change.
+        assertThat(c1.refCnt(), is(1));
+        assertThat(c2.refCnt(), is(2));
+        assertThat(c3.refCnt(), is(3));
+
+        // This should decrease bufA.refCnt().
+        bufB.release();
+        assertThat(bufB.refCnt(), is(0));
+
+        // Ensure bufA.refCnt() changed.
+        assertThat(bufA.refCnt(), is(0));
+
+        // Ensure that c[123]'s refCnt also changed due to the deallocation of bufA.
+        assertThat(c1.refCnt(), is(0));
+        assertThat(c2.refCnt(), is(1));
+        assertThat(c3.refCnt(), is(2));
+
+        c3.release(2);
+        c2.release();
+    }
+
+    @Test
+    public void testReferenceCounts3() {
+        ByteBuf c1 = buffer().writeByte(1);
+        ByteBuf c2 = buffer().writeByte(2).retain();
+        ByteBuf c3 = buffer().writeByte(3).retain(2);
+
+        CompositeByteBuf buf = freeLater(compositeBuffer());
+        assertThat(buf.refCnt(), is(1));
+
+        List<ByteBuf> components = new ArrayList<ByteBuf>();
+        Collections.addAll(components, c1, c2, c3);
+        buf.addComponents(components);
+
+        // Ensure that c[123]'s refCount did not change.
+        assertThat(c1.refCnt(), is(1));
+        assertThat(c2.refCnt(), is(2));
+        assertThat(c3.refCnt(), is(3));
+
+        assertThat(buf.component(0).refCnt(), is(1));
+        assertThat(buf.component(1).refCnt(), is(2));
+        assertThat(buf.component(2).refCnt(), is(3));
+
+        c3.release(2);
+        c2.release();
+    }
+
+    @Test
+    public void testNestedLayout() {
+        CompositeByteBuf buf = freeLater(compositeBuffer());
+        buf.addComponent(
+                compositeBuffer()
+                        .addComponent(wrappedBuffer(new byte[]{1, 2}))
+                        .addComponent(wrappedBuffer(new byte[]{3, 4})).slice(1, 2));
+
+        ByteBuffer[] nioBuffers = buf.nioBuffers(0, 2);
+        assertThat(nioBuffers.length, is(2));
+        assertThat(nioBuffers[0].remaining(), is(1));
+        assertThat(nioBuffers[0].get(), is((byte) 2));
+        assertThat(nioBuffers[1].remaining(), is(1));
+        assertThat(nioBuffers[1].get(), is((byte) 3));
     }
 }

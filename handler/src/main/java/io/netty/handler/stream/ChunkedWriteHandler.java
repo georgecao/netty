@@ -348,18 +348,10 @@ public class ChunkedWriteHandler
         }
     }
 
-    @Override
-    public void beforeRemove(ChannelHandlerContext ctx) throws Exception {
-        // try to flush again a last time.
-        //
-        // See #304
-        doFlush(ctx);
-    }
-
     // This method should not need any synchronization as the ChunkedWriteHandler will not receive any new events
     @Override
-    public void afterRemove(ChannelHandlerContext ctx) throws Exception {
-        // Fail all MessageEvent's that are left. This is needed because otherwise we would never notify the
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        // Fail all promised that are queued. This is needed because otherwise we would never notify the
         // ChannelFuture and the registered FutureListener. See #304
         discard(ctx, new ChannelException(ChunkedWriteHandler.class.getSimpleName() + " removed from pipeline."));
     }

@@ -32,6 +32,7 @@ import io.netty.channel.ChannelOutboundMessageHandler;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoopGroup;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import io.netty.util.concurrent.EventExecutorGroup;
 import org.junit.AfterClass;
 import org.junit.Assert;
@@ -43,9 +44,7 @@ import java.util.HashSet;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class LocalTransportThreadModelTest {
@@ -90,9 +89,9 @@ public class LocalTransportThreadModelTest {
 
     @Test(timeout = 5000)
     public void testStagedExecution() throws Throwable {
-        EventLoopGroup l = new LocalEventLoopGroup(4, new PrefixThreadFactory("l"));
-        EventExecutorGroup e1 = new DefaultEventExecutorGroup(4, new PrefixThreadFactory("e1"));
-        EventExecutorGroup e2 = new DefaultEventExecutorGroup(4, new PrefixThreadFactory("e2"));
+        EventLoopGroup l = new LocalEventLoopGroup(4, new DefaultThreadFactory("l"));
+        EventExecutorGroup e1 = new DefaultEventExecutorGroup(4, new DefaultThreadFactory("e1"));
+        EventExecutorGroup e2 = new DefaultEventExecutorGroup(4, new DefaultThreadFactory("e2"));
         ThreadNameAuditor h1 = new ThreadNameAuditor();
         ThreadNameAuditor h2 = new ThreadNameAuditor();
         ThreadNameAuditor h3 = new ThreadNameAuditor();
@@ -208,12 +207,12 @@ public class LocalTransportThreadModelTest {
     @Test(timeout = 30000)
     @Ignore("regression test")
     public void testConcurrentMessageBufferAccess() throws Throwable {
-        EventLoopGroup l = new LocalEventLoopGroup(4, new PrefixThreadFactory("l"));
-        EventExecutorGroup e1 = new DefaultEventExecutorGroup(4, new PrefixThreadFactory("e1"));
-        EventExecutorGroup e2 = new DefaultEventExecutorGroup(4, new PrefixThreadFactory("e2"));
-        EventExecutorGroup e3 = new DefaultEventExecutorGroup(4, new PrefixThreadFactory("e3"));
-        EventExecutorGroup e4 = new DefaultEventExecutorGroup(4, new PrefixThreadFactory("e4"));
-        EventExecutorGroup e5 = new DefaultEventExecutorGroup(4, new PrefixThreadFactory("e5"));
+        EventLoopGroup l = new LocalEventLoopGroup(4, new DefaultThreadFactory("l"));
+        EventExecutorGroup e1 = new DefaultEventExecutorGroup(4, new DefaultThreadFactory("e1"));
+        EventExecutorGroup e2 = new DefaultEventExecutorGroup(4, new DefaultThreadFactory("e2"));
+        EventExecutorGroup e3 = new DefaultEventExecutorGroup(4, new DefaultThreadFactory("e3"));
+        EventExecutorGroup e4 = new DefaultEventExecutorGroup(4, new DefaultThreadFactory("e4"));
+        EventExecutorGroup e5 = new DefaultEventExecutorGroup(4, new DefaultThreadFactory("e5"));
 
         try {
             final MessageForwarder1 h1 = new MessageForwarder1();
@@ -774,24 +773,6 @@ public class LocalTransportThreadModelTest {
             //System.err.print("[" + Thread.currentThread().getName() + "] ");
             //cause.printStackTrace();
             super.exceptionCaught(ctx, cause);
-        }
-    }
-
-    private static class PrefixThreadFactory implements ThreadFactory {
-
-        private final String prefix;
-        private final AtomicInteger id = new AtomicInteger();
-
-        public PrefixThreadFactory(String prefix) {
-            this.prefix = prefix;
-        }
-
-        @Override
-        public Thread newThread(Runnable r) {
-            Thread t = new Thread(r);
-            t.setName(prefix + '-' + id.incrementAndGet());
-            t.setDaemon(true);
-            return t;
         }
     }
 }
