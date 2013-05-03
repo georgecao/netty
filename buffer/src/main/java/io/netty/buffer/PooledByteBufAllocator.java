@@ -29,9 +29,9 @@ public class PooledByteBufAllocator extends AbstractByteBufAllocator {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(PooledByteBufAllocator.class);
 
-    private static final int DEFAULT_NUM_HEAP_ARENA = Math.max(1, SystemPropertyUtil.getInt(
+    private static final int DEFAULT_NUM_HEAP_ARENA = Math.max(0, SystemPropertyUtil.getInt(
             "io.netty.allocator.numHeapArenas", Runtime.getRuntime().availableProcessors()));
-    private static final int DEFAULT_NUM_DIRECT_ARENA = Math.max(1, SystemPropertyUtil.getInt(
+    private static final int DEFAULT_NUM_DIRECT_ARENA = Math.max(0, SystemPropertyUtil.getInt(
             "io.netty.allocator.numDirectArenas", Runtime.getRuntime().availableProcessors()));
     private static final int DEFAULT_PAGE_SIZE;
     private static final int DEFAULT_MAX_ORDER; // 8192 << 11 = 16 MiB per chunk
@@ -87,10 +87,23 @@ public class PooledByteBufAllocator extends AbstractByteBufAllocator {
         private final AtomicInteger index = new AtomicInteger();
         @Override
         protected PoolThreadCache initialValue() {
-            int idx = index.getAndIncrement();
-            int heapIdx = Math.abs(idx % heapArenas.length);
-            int directIdx = Math.abs(idx % directArenas.length);
-            return new PoolThreadCache(heapArenas[heapIdx], directArenas[directIdx]);
+            final int idx = index.getAndIncrement();
+            final PoolArena<byte[]> heapArena;
+            final PoolArena<ByteBuffer> directArena;
+
+            if (heapArenas != null) {
+                heapArena = heapArenas[Math.abs(idx % heapArenas.length)];
+            } else {
+                heapArena = null;
+            }
+
+            if (directArenas != null) {
+                directArena = directArenas[Math.abs(idx % directArenas.length)];
+            } else {
+                directArena = null;
+            }
+
+            return new PoolThreadCache(heapArena, directArena);
         }
     };
 
@@ -106,29 +119,36 @@ public class PooledByteBufAllocator extends AbstractByteBufAllocator {
         this(false, nHeapArena, nDirectArena, pageSize, maxOrder);
     }
 
-    public PooledByteBufAllocator(
-            boolean directByDefault, int nHeapArena, int nDirectArena, int pageSize, int maxOrder) {
-        super(directByDefault);
+    public PooledByteBufAllocator(boolean preferDirect, int nHeapArena, int nDirectArena, int pageSize, int maxOrder) {
+        super(preferDirect);
 
         final int chunkSize = validateAndCalculateChunkSize(pageSize, maxOrder);
 
-        if (nHeapArena <= 0) {
-            throw new IllegalArgumentException("nHeapArena: " + nHeapArena + " (expected: 1+)");
+        if (nHeapArena < 0) {
+            throw new IllegalArgumentException("nHeapArena: " + nHeapArena + " (expected: >= 0)");
         }
-        if (nDirectArena <= 0) {
-            throw new IllegalArgumentException("nDirectArea: " + nDirectArena + " (expected: 1+)");
+        if (nDirectArena < 0) {
+            throw new IllegalArgumentException("nDirectArea: " + nDirectArena + " (expected: >= 0)");
         }
 
         int pageShifts = validateAndCalculatePageShifts(pageSize);
 
-        heapArenas = newArenaArray(nHeapArena);
-        for (int i = 0; i < heapArenas.length; i ++) {
-            heapArenas[i] = new PoolArena.HeapArena(this, pageSize, maxOrder, pageShifts, chunkSize);
+        if (nHeapArena > 0) {
+            heapArenas = newArenaArray(nHeapArena);
+            for (int i = 0; i < heapArenas.length; i ++) {
+                heapArenas[i] = new PoolArena.HeapArena(this, pageSize, maxOrder, pageShifts, chunkSize);
+            }
+        } else {
+            heapArenas = null;
         }
 
-        directArenas = newArenaArray(nDirectArena);
-        for (int i = 0; i < directArenas.length; i ++) {
-            directArenas[i] = new PoolArena.DirectArena(this, pageSize, maxOrder, pageShifts, chunkSize);
+        if (nHeapArena > 0) {
+            directArenas = newArenaArray(nDirectArena);
+            for (int i = 0; i < directArenas.length; i ++) {
+                directArenas[i] = new PoolArena.DirectArena(this, pageSize, maxOrder, pageShifts, chunkSize);
+            }
+        } else {
+            directArenas = null;
         }
     }
 
@@ -181,13 +201,27 @@ public class PooledByteBufAllocator extends AbstractByteBufAllocator {
     @Override
     protected ByteBuf newHeapBuffer(int initialCapacity, int maxCapacity) {
         PoolThreadCache cache = threadCache.get();
-        return cache.heapArena.allocate(cache, initialCapacity, maxCapacity);
+        PoolArena<byte[]> heapArena = cache.heapArena;
+        if (heapArena != null) {
+            return heapArena.allocate(cache, initialCapacity, maxCapacity);
+        } else {
+            return new UnpooledHeapByteBuf(this, initialCapacity, maxCapacity);
+        }
     }
 
     @Override
     protected ByteBuf newDirectBuffer(int initialCapacity, int maxCapacity) {
         PoolThreadCache cache = threadCache.get();
-        return cache.directArena.allocate(cache, initialCapacity, maxCapacity);
+        PoolArena<ByteBuffer> directArena = cache.directArena;
+        if (directArena != null) {
+            return directArena.allocate(cache, initialCapacity, maxCapacity);
+        } else {
+            if (PlatformDependent.hasUnsafe()) {
+                return new UnpooledUnsafeDirectByteBuf(this, initialCapacity, maxCapacity);
+            } else {
+                return new UnpooledDirectByteBuf(this, initialCapacity, maxCapacity);
+            }
+        }
     }
 
     public String toString() {

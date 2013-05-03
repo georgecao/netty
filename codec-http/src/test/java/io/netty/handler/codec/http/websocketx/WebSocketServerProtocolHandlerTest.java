@@ -129,7 +129,7 @@ public class WebSocketServerProtocolHandlerTest {
     }
 
     private static String getResponseMessage(FullHttpResponse response) {
-        return new String(response.data().array());
+        return new String(response.content().array());
     }
 
     private static FullHttpResponse getHttpResponse(EmbeddedMessageChannel ch) {
@@ -143,11 +143,6 @@ public class WebSocketServerProtocolHandlerTest {
         @Override
         public MessageBuf<Object> newOutboundBuffer(ChannelHandlerContext ctx) throws Exception {
             return Unpooled.messageBuffer();
-        }
-
-        @Override
-        public void freeOutboundBuffer(ChannelHandlerContext ctx) throws Exception {
-            ctx.outboundMessageBuffer().release();
         }
 
         @Override

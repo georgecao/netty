@@ -809,7 +809,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
 
     /**
      * Returns the length of the content.  Please note that this value is
-     * not retrieved from {@link HttpContent#data()} but from the
+     * not retrieved from {@link HttpContent#content()} but from the
      * {@code "Content-Length"} header, and thus they are independent from each
      * other.
      *
@@ -838,7 +838,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
 
     /**
      * Returns the length of the content.  Please note that this value is
-     * not retrieved from {@link HttpContent#data()} but from the
+     * not retrieved from {@link HttpContent#content()} but from the
      * {@code "Content-Length"} header, and thus they are independent from each
      * other.
      *
@@ -1141,7 +1141,16 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
 
     public static void removeTransferEncodingChunked(HttpMessage m) {
         List<String> values = m.headers().getAll(Names.TRANSFER_ENCODING);
-        values.remove(Values.CHUNKED);
+        if (values.isEmpty()) {
+            return;
+        }
+        Iterator<String> valuesIt = values.iterator();
+        while (valuesIt.hasNext()) {
+            String value = valuesIt.next();
+            if (value.equalsIgnoreCase(Values.CHUNKED)) {
+                valuesIt.remove();
+            }
+        }
         if (values.isEmpty()) {
             m.headers().remove(Names.TRANSFER_ENCODING);
         } else {

@@ -544,7 +544,7 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
         }
 
         @Override
-        public final ChannelHandlerContext directOutboundContext() {
+        public final ChannelHandlerContext headContext() {
             return pipeline.head;
         }
 
@@ -620,7 +620,11 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
             } catch (Throwable t) {
                 // Close the channel directly to avoid FD leak.
                 closeForcibly();
-                promise.setFailure(t);
+                if (!promise.tryFailure(t)) {
+                    logger.warn(
+                            "Tried to fail the registration promise, but it is complete already. " +
+                            "Swallowing the cause of the registration failure:", t);
+                }
                 closeFuture.setClosed();
             }
         }
@@ -849,7 +853,7 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
 
         private int outboundBufSize() {
             final int bufSize;
-            final ChannelHandlerContext ctx = directOutboundContext();
+            final ChannelHandlerContext ctx = headContext();
             if (metadata().bufferType() == BufType.BYTE) {
                 bufSize = ctx.outboundByteBuffer().readableBytes();
             } else {
@@ -895,7 +899,7 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
             }
 
             inFlushNow = true;
-            ChannelHandlerContext ctx = directOutboundContext();
+            ChannelHandlerContext ctx = headContext();
             Throwable cause = null;
             try {
                 if (metadata().bufferType() == BufType.BYTE) {

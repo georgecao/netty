@@ -13,8 +13,18 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
+package io.netty.handler.codec.http;
 
-/**
- * OSGI Dependency tests
- */
-package io.netty.verify.osgi;
+import org.junit.Assert;
+import org.junit.Test;
+
+public class HttpHeadersTest {
+
+    @Test
+    public void testRemoveTransferEncodingIgnoreCase() {
+        HttpMessage message = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        message.headers().set(HttpHeaders.Names.TRANSFER_ENCODING, "Chunked");
+        HttpHeaders.removeTransferEncodingChunked(message);
+        Assert.assertTrue(message.headers().isEmpty());
+    }
+}
