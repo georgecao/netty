@@ -21,7 +21,7 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-parent</artifactId>
-    <version>4.0.0.CR2-SNAPSHOT</version>
+    <version>4.0.0.Final-SNAPSHOT</version>
   </parent>
 
   <artifactId>netty-testsuite-osgi-parent</artifactId>
@@ -49,7 +49,7 @@
 
   <build>
     <plugins>
-      <!-- do not deploy this artifact -->
+      <!-- Do not deploy this artifact. -->
       <plugin>
         <artifactId>maven-deploy-plugin</artifactId>
         <configuration>

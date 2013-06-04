@@ -16,7 +16,6 @@
 package io.netty.example.filetransfer;
 
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.buffer.BufType;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundMessageHandlerAdapter;
@@ -66,7 +65,7 @@ public class FileServer {
                  @Override
                  public void initChannel(SocketChannel ch) throws Exception {
                      ch.pipeline().addLast(
-                             new StringEncoder(BufType.BYTE, CharsetUtil.UTF_8),
+                             new StringEncoder(CharsetUtil.UTF_8),
                              new LineBasedFrameDecoder(8192),
                              new StringDecoder(CharsetUtil.UTF_8),
                              new FileHandler());
@@ -80,8 +79,8 @@ public class FileServer {
             f.channel().closeFuture().sync();
         } finally {
             // Shut down all event loops to terminate all threads.
-            bossGroup.shutdown();
-            workerGroup.shutdown();
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
         }
     }
 

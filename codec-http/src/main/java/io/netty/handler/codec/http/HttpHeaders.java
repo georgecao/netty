@@ -750,7 +750,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
         if (value == null) {
             throw new ParseException("header not found: " + name, 0);
         }
-        return new HttpHeaderDateFormat().parse(value);
+        return HttpHeaderDateFormat.get().parse(value);
     }
 
     /**
@@ -768,7 +768,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
         }
 
         try {
-            return new HttpHeaderDateFormat().parse(value);
+            return HttpHeaderDateFormat.get().parse(value);
         } catch (ParseException e) {
             return defaultValue;
         }
@@ -782,7 +782,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      */
     public static void setDateHeader(HttpMessage message, String name, Date value) {
         if (value != null) {
-            message.headers().set(name, new HttpHeaderDateFormat().format(value));
+            message.headers().set(name, HttpHeaderDateFormat.get().format(value));
         } else {
             message.headers().set(name, null);
         }
@@ -809,7 +809,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
 
     /**
      * Returns the length of the content.  Please note that this value is
-     * not retrieved from {@link HttpContent#data()} but from the
+     * not retrieved from {@link HttpContent#content()} but from the
      * {@code "Content-Length"} header, and thus they are independent from each
      * other.
      *
@@ -838,7 +838,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
 
     /**
      * Returns the length of the content.  Please note that this value is
-     * not retrieved from {@link HttpContent#data()} but from the
+     * not retrieved from {@link HttpContent#content()} but from the
      * {@code "Content-Length"} header, and thus they are independent from each
      * other.
      *
@@ -947,7 +947,7 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
      */
     public static void setDate(HttpMessage message, Date value) {
         if (value != null) {
-            message.headers().set(Names.DATE, new HttpHeaderDateFormat().format(value));
+            message.headers().set(Names.DATE, HttpHeaderDateFormat.get().format(value));
         } else {
             message.headers().set(Names.DATE, null);
         }
@@ -1141,7 +1141,16 @@ public abstract class HttpHeaders implements Iterable<Map.Entry<String, String>>
 
     public static void removeTransferEncodingChunked(HttpMessage m) {
         List<String> values = m.headers().getAll(Names.TRANSFER_ENCODING);
-        values.remove(Values.CHUNKED);
+        if (values.isEmpty()) {
+            return;
+        }
+        Iterator<String> valuesIt = values.iterator();
+        while (valuesIt.hasNext()) {
+            String value = valuesIt.next();
+            if (value.equalsIgnoreCase(Values.CHUNKED)) {
+                valuesIt.remove();
+            }
+        }
         if (values.isEmpty()) {
             m.headers().remove(Names.TRANSFER_ENCODING);
         } else {

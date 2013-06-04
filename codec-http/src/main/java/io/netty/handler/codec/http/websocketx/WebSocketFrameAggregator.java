@@ -31,6 +31,7 @@ import io.netty.handler.codec.TooLongFrameException;
 public class WebSocketFrameAggregator extends MessageToMessageDecoder<WebSocketFrame> {
     private final int maxFrameSize;
     private WebSocketFrame currentFrame;
+    private boolean tooLongFrameFound;
 
     /**
      * Construct a new instance
@@ -48,12 +49,13 @@ public class WebSocketFrameAggregator extends MessageToMessageDecoder<WebSocketF
     @Override
     protected void decode(ChannelHandlerContext ctx, WebSocketFrame msg, MessageBuf<Object> out) throws Exception {
         if (currentFrame == null) {
+            tooLongFrameFound = false;
             if (msg.isFinalFragment()) {
                 out.add(msg.retain());
                 return;
             }
-            ByteBuf buf = ctx.alloc().compositeBuffer().addComponent(msg.data().retain());
-            buf.writerIndex(buf.writerIndex() + msg.data().readableBytes());
+            ByteBuf buf = ctx.alloc().compositeBuffer().addComponent(msg.content().retain());
+            buf.writerIndex(buf.writerIndex() + msg.content().readableBytes());
 
             if (msg instanceof TextWebSocketFrame) {
                 currentFrame = new TextWebSocketFrame(true, msg.rsv(), buf);
@@ -66,19 +68,26 @@ public class WebSocketFrameAggregator extends MessageToMessageDecoder<WebSocketF
             return;
         }
         if (msg instanceof ContinuationWebSocketFrame) {
-            CompositeByteBuf content = (CompositeByteBuf) currentFrame.data();
-            if (content.readableBytes() > maxFrameSize - msg.data().readableBytes()) {
+            if (tooLongFrameFound) {
+                if (msg.isFinalFragment()) {
+                    currentFrame = null;
+                }
+                return;
+            }
+            CompositeByteBuf content = (CompositeByteBuf) currentFrame.content();
+            if (content.readableBytes() > maxFrameSize - msg.content().readableBytes()) {
+                tooLongFrameFound = true;
                 throw new TooLongFrameException(
                         "WebSocketFrame length exceeded " + content +
                                 " bytes.");
             }
-            content.addComponent(msg.data().retain());
-            content.writerIndex(content.writerIndex() + msg.data().readableBytes());
+            content.addComponent(msg.content().retain());
+            content.writerIndex(content.writerIndex() + msg.content().readableBytes());
 
             if (msg.isFinalFragment()) {
-                WebSocketFrame frame = this.currentFrame;
+                WebSocketFrame currentFrame = this.currentFrame;
                 this.currentFrame = null;
-                out.add(frame);
+                out.add(currentFrame);
                 return;
             } else {
                 return;

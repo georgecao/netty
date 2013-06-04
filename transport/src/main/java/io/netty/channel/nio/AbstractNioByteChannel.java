@@ -19,9 +19,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
-import io.netty.channel.ChannelProgressivePromise;
-import io.netty.channel.ChannelPromise;
-import io.netty.channel.FileRegion;
 import io.netty.channel.socket.ChannelInputShutdownEvent;
 
 import java.io.IOException;
@@ -58,8 +55,11 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
             assert eventLoop().inEventLoop();
             final SelectionKey key = selectionKey();
             if (!config().isAutoRead()) {
-                // only remove readInterestOp if needed
-                key.interestOps(key.interestOps() & ~readInterestOp);
+                int interestOps = key.interestOps();
+                if ((interestOps & readInterestOp) != 0) {
+                    // only remove readInterestOp if needed
+                    key.interestOps(interestOps & ~readInterestOp);
+                }
             }
 
             final ChannelPipeline pipeline = pipeline();
@@ -96,6 +96,11 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                                         "least one byte.");
                             }
                         }
+                        if (!config().isAutoRead()) {
+                            // stop reading until next Channel.read() call
+                            // See https://github.com/netty/netty/issues/1363
+                            break loop;
+                        }
                     }
                 }
             } catch (Throwable t) {
@@ -123,7 +128,7 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                             key.interestOps(key.interestOps() & ~readInterestOp);
                             pipeline.fireUserEventTriggered(ChannelInputShutdownEvent.INSTANCE);
                         } else {
-                            close(voidFuture());
+                            close(voidPromise());
                         }
                     }
                 } else if (!firedChannelReadSuspended) {
@@ -137,21 +142,16 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
     protected void doFlushByteBuffer(ByteBuf buf) throws Exception {
         for (int i = config().getWriteSpinCount() - 1; i >= 0; i --) {
             int localFlushedAmount = doWriteBytes(buf, i == 0);
-            if (localFlushedAmount > 0) {
-                break;
-            }
-            if (!buf.isReadable()) {
-                // Reset reader/writerIndex to 0 if the buffer is empty.
-                buf.clear();
+            if (localFlushedAmount > 0 || !buf.isReadable()) {
                 break;
             }
         }
     }
 
     @Override
-    protected void doFlushFileRegion(final FileRegion region, final ChannelPromise promise) throws Exception {
+    protected void doFlushFileRegion(final FlushTask task) throws Exception {
         if (javaChannel() instanceof WritableByteChannel) {
-            TransferTask transferTask = new TransferTask(region, (WritableByteChannel) javaChannel(), promise);
+            TransferTask transferTask = new TransferTask(task, (WritableByteChannel) javaChannel());
             transferTask.transfer();
         } else {
             throw new UnsupportedOperationException("Underlying Channel is not of instance "
@@ -161,44 +161,39 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
 
     private final class TransferTask implements NioTask<SelectableChannel> {
         private long writtenBytes;
-        private final FileRegion region;
+        private final FlushTask task;
         private final WritableByteChannel wch;
-        private final ChannelPromise promise;
 
-        TransferTask(FileRegion region, WritableByteChannel wch, ChannelPromise promise) {
-            this.region = region;
+        TransferTask(FlushTask task, WritableByteChannel wch) {
+            this.task = task;
             this.wch = wch;
-            this.promise = promise;
         }
 
         void transfer() {
             try {
                 for (;;) {
-                    long localWrittenBytes = region.transferTo(wch, writtenBytes);
+                    long localWrittenBytes = task.region().transferTo(wch, writtenBytes);
                     if (localWrittenBytes == 0) {
                         // reschedule for write once the channel is writable again
                         eventLoop().executeWhenWritable(
                                 AbstractNioByteChannel.this, this);
                         return;
                     } else if (localWrittenBytes == -1) {
-                        checkEOF(region, writtenBytes);
-                        promise.setSuccess();
+                        checkEOF(task.region(), writtenBytes);
+                        task.setSuccess();
                         return;
                     } else {
                         writtenBytes += localWrittenBytes;
-                        if (promise instanceof ChannelProgressivePromise) {
-                            ((ChannelProgressivePromise) promise).setProgress(writtenBytes, region.count());
-                        }
-                        if (writtenBytes >= region.count()) {
-                            region.release();
-                            promise.setSuccess();
+                        task.setProgress(writtenBytes);
+
+                        if (writtenBytes >= task.region().count()) {
+                            task.setSuccess();
                             return;
                         }
                     }
                 }
             } catch (Throwable cause) {
-                region.release();
-                promise.setFailure(cause);
+                task.setFailure(cause);
             }
         }
 
@@ -210,16 +205,15 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
         @Override
         public void channelUnregistered(SelectableChannel ch, Throwable cause) throws Exception {
             if (cause != null) {
-                promise.setFailure(cause);
+                task.setFailure(cause);
                 return;
             }
 
-            if (writtenBytes < region.count()) {
-                region.release();
+            if (writtenBytes < task.region().count()) {
                 if (!isOpen()) {
-                    promise.setFailure(new ClosedChannelException());
+                    task.setFailure(new ClosedChannelException());
                 } else {
-                    promise.setFailure(new IllegalStateException(
+                    task.setFailure(new IllegalStateException(
                             "Channel was unregistered before the region could be fully written"));
                 }
             }

@@ -159,10 +159,9 @@ public class SslHandler
         InternalLoggerFactory.getInstance(SslHandler.class);
 
     private static final Pattern IGNORABLE_CLASS_IN_STACK = Pattern.compile(
-            "^.*(?:Socket|Datagram|Sctp)Channel.*$");
+            "^.*(?:Socket|Datagram|Sctp|Udt)Channel.*$");
     private static final Pattern IGNORABLE_ERROR_MESSAGE = Pattern.compile(
-            "^.*(?:connection.*reset|connection.*closed|broken.*pipe).*$",
-            Pattern.CASE_INSENSITIVE);
+            "^.*(?:connection.*(?:reset|closed|abort|broken)|broken.*pipe).*$", Pattern.CASE_INSENSITIVE);
 
     private static final SSLException SSLENGINE_CLOSED = new SSLException("SSLEngine closed already");
     private static final SSLException HANDSHAKE_TIMED_OUT = new SSLException("handshake timed out");
@@ -189,8 +188,6 @@ public class SslHandler
 
     private volatile long handshakeTimeoutMillis = 10000;
     private volatile long closeNotifyTimeoutMillis = 3000;
-
-    private static final SslHandshakeCompletionEvent HANDSHAKE_SUCCESS_EVENT = new SslHandshakeCompletionEvent(null);
 
     /**
      * Creates a new instance.
@@ -270,7 +267,7 @@ public class SslHandler
     }
 
     public long getCloseNotifyTimeoutMillis() {
-        return handshakeTimeoutMillis;
+        return closeNotifyTimeoutMillis;
     }
 
     public void setCloseNotifyTimeout(long closeNotifyTimeout, TimeUnit unit) {
@@ -358,11 +355,6 @@ public class SslHandler
     }
 
     @Override
-    public void freeInboundBuffer(ChannelHandlerContext ctx) throws Exception {
-        ctx.inboundByteBuffer().release();
-    }
-
-    @Override
     public ByteBuf newOutboundBuffer(ChannelHandlerContext ctx) throws Exception {
         return ChannelHandlerUtil.allocate(ctx);
     }
@@ -370,11 +362,6 @@ public class SslHandler
     @Override
     public void discardOutboundReadBytes(ChannelHandlerContext ctx) throws Exception {
         ctx.outboundByteBuffer().discardSomeReadBytes();
-    }
-
-    @Override
-    public void freeOutboundBuffer(ChannelHandlerContext ctx) throws Exception {
-        ctx.outboundByteBuffer().release();
     }
 
     @Override
@@ -919,7 +906,7 @@ public class SslHandler
      */
     private void setHandshakeSuccess() {
         if (handshakePromise.trySuccess(ctx.channel())) {
-            ctx.fireUserEventTriggered(HANDSHAKE_SUCCESS_EVENT);
+            ctx.fireUserEventTriggered(SslHandshakeCompletionEvent.SUCCESS);
         }
     }
 
@@ -935,20 +922,29 @@ public class SslHandler
         try {
             engine.closeInbound();
         } catch (SSLException e) {
+            // only log in debug mode as it most likely harmless and latest chrome still trigger
+            // this all the time.
+            //
+            // See https://github.com/netty/netty/issues/1340
             if (!disconnected) {
-                logger.warn("SSLEngine.closeInbound() raised an exception after a handshake failure.", e);
+                logger.debug("SSLEngine.closeInbound() raised an exception after a handshake failure.", e);
             } else if (!closeNotifyWriteListener.done) {
-                logger.warn("SSLEngine.closeInbound() raised an exception due to closed connection.", e);
+                logger.debug("SSLEngine.closeInbound() raised an exception due to closed connection.", e);
             } else {
                 // cause == null && sentCloseNotify
                 // closeInbound() will raise an exception with bogus truncation attack warning.
             }
         }
 
+        notifyHandshakeFailure(cause);
+        flush0(ctx, 0, cause);
+    }
+
+    private void notifyHandshakeFailure(Throwable cause) {
         if (handshakePromise.tryFailure(cause)) {
             ctx.fireUserEventTriggered(new SslHandshakeCompletionEvent(cause));
+            ctx.pipeline().fireExceptionCaught(cause);
         }
-        flush0(ctx, 0, cause);
     }
 
     private void closeOutboundAndChannel(
@@ -992,11 +988,7 @@ public class SslHandler
                     if (handshakePromise.isDone()) {
                         return;
                     }
-
-                    if (handshakePromise.tryFailure(HANDSHAKE_TIMED_OUT)) {
-                        ctx.fireExceptionCaught(HANDSHAKE_TIMED_OUT);
-                        ctx.close();
-                    }
+                    notifyHandshakeFailure(HANDSHAKE_TIMED_OUT);
                 }
             }, handshakeTimeoutMillis, TimeUnit.MILLISECONDS);
         } else {
@@ -1015,10 +1007,7 @@ public class SslHandler
             engine.beginHandshake();
             flush0(ctx, ctx.newPromise(), true);
         } catch (Exception e) {
-            if (handshakePromise.tryFailure(e)) {
-                ctx.fireExceptionCaught(e);
-                ctx.close();
-            }
+            notifyHandshakeFailure(e);
         }
         return handshakePromise;
     }
@@ -1035,7 +1024,6 @@ public class SslHandler
                 @Override
                 public void operationComplete(Future<Channel> future) throws Exception {
                     if (!future.isSuccess()) {
-                        ctx.pipeline().fireExceptionCaught(future.cause());
                         ctx.close();
                     }
                 }

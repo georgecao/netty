@@ -59,11 +59,11 @@ public class HttpContentEncoderTest {
 
         HttpContent chunk;
         chunk = (HttpContent) ch.readOutbound();
-        assertThat(chunk.data().toString(CharsetUtil.US_ASCII), is("3"));
+        assertThat(chunk.content().toString(CharsetUtil.US_ASCII), is("3"));
         chunk = (HttpContent) ch.readOutbound();
-        assertThat(chunk.data().toString(CharsetUtil.US_ASCII), is("2"));
+        assertThat(chunk.content().toString(CharsetUtil.US_ASCII), is("2"));
         chunk = (HttpContent) ch.readOutbound();
-        assertThat(chunk.data().toString(CharsetUtil.US_ASCII), is("1"));
+        assertThat(chunk.content().toString(CharsetUtil.US_ASCII), is("1"));
 
         assertThat(chunk, is(instanceOf(LastHttpContent.class)));
         assertThat(ch.readOutbound(), is(nullValue()));
@@ -86,11 +86,11 @@ public class HttpContentEncoderTest {
 
         HttpContent chunk;
         chunk = (HttpContent) ch.readOutbound();
-        assertThat(chunk.data().toString(CharsetUtil.US_ASCII), is("3"));
+        assertThat(chunk.content().toString(CharsetUtil.US_ASCII), is("3"));
         chunk = (HttpContent) ch.readOutbound();
-        assertThat(chunk.data().toString(CharsetUtil.US_ASCII), is("2"));
+        assertThat(chunk.content().toString(CharsetUtil.US_ASCII), is("2"));
         chunk = (HttpContent) ch.readOutbound();
-        assertThat(chunk.data().toString(CharsetUtil.US_ASCII), is("1"));
+        assertThat(chunk.content().toString(CharsetUtil.US_ASCII), is("1"));
 
         assertThat(chunk, is(instanceOf(LastHttpContent.class)));
         assertThat(ch.readOutbound(), is(nullValue()));
@@ -109,8 +109,55 @@ public class HttpContentEncoderTest {
         assertEncodedResponse(ch);
 
         LastHttpContent c = (LastHttpContent) ch.readOutbound();
-        assertThat(c.data().readableBytes(), is(2));
-        assertThat(c.data().toString(CharsetUtil.US_ASCII), is("42"));
+        assertThat(c.content().readableBytes(), is(2));
+        assertThat(c.content().toString(CharsetUtil.US_ASCII), is("42"));
+
+        assertThat(ch.readOutbound(), is(nullValue()));
+    }
+
+    /**
+     * If the length of the content is unknown, {@link HttpContentEncoder} should not skip encoding even if the
+     * actual length is turned out to be 0.
+     */
+    @Test
+    public void testEmptySplitContent() throws Exception {
+        EmbeddedMessageChannel ch = new EmbeddedMessageChannel(new TestEncoder());
+        ch.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/"));
+
+        ch.writeOutbound(new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK));
+        assertEncodedResponse(ch);
+
+        ch.writeOutbound(LastHttpContent.EMPTY_LAST_CONTENT);
+        HttpContent chunk = (HttpContent) ch.readOutbound();
+        assertThat(chunk.content().isReadable(), is(false));
+        assertThat(chunk, is(instanceOf(LastHttpContent.class)));
+        assertThat(ch.readOutbound(), is(nullValue()));
+    }
+
+    /**
+     * If the length of the content is 0 for sure, {@link HttpContentEncoder} should skip encoding.
+     */
+    @Test
+    public void testEmptyFullContent() throws Exception {
+        EmbeddedMessageChannel ch = new EmbeddedMessageChannel(new TestEncoder());
+        ch.writeInbound(new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/"));
+
+        FullHttpResponse res = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.EMPTY_BUFFER);
+        ch.writeOutbound(res);
+
+        Object o = ch.readOutbound();
+        assertThat(o, is(instanceOf(FullHttpResponse.class)));
+
+        res = (FullHttpResponse) o;
+        assertThat(res.headers().get(Names.TRANSFER_ENCODING), is(nullValue()));
+
+        // Length must be set to 0.
+        assertThat(res.headers().get(Names.CONTENT_LENGTH), is("0"));
+        // Content encoding shouldn't be modified.
+        assertThat(res.headers().get(Names.CONTENT_ENCODING), is(nullValue()));
+        assertThat(res.content().readableBytes(), is(0));
+        assertThat(res.content().toString(CharsetUtil.US_ASCII), is(""));
 
         assertThat(ch.readOutbound(), is(nullValue()));
     }

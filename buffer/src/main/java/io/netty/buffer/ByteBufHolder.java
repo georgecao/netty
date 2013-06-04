@@ -22,9 +22,8 @@ public interface ByteBufHolder extends ReferenceCounted {
 
     /**
      * Return the data which is held by this {@link ByteBufHolder}.
-     *
      */
-    ByteBuf data();
+    ByteBuf content();
 
     /**
      * Create a deep copy of this {@link ByteBufHolder}.

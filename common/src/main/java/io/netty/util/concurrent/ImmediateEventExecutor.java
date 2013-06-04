@@ -13,19 +13,19 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
-package io.netty.channel.group;
+package io.netty.util.concurrent;
 
-import io.netty.util.concurrent.AbstractEventExecutor;
-import io.netty.util.concurrent.DefaultPromise;
-import io.netty.util.concurrent.EventExecutor;
-import io.netty.util.concurrent.EventExecutorGroup;
-import io.netty.util.concurrent.Promise;
-
-import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-final class ImmediateEventExecutor extends AbstractEventExecutor {
+/**
+ * {@link AbstractEventExecutor} which execute tasks in the callers thread.
+ */
+public final class ImmediateEventExecutor extends AbstractEventExecutor {
+    public static final ImmediateEventExecutor INSTANCE = new ImmediateEventExecutor();
+
+    private  ImmediateEventExecutor() {
+        // use static instance
+    }
 
     @Override
     public EventExecutorGroup parent() {
@@ -43,7 +43,15 @@ final class ImmediateEventExecutor extends AbstractEventExecutor {
     }
 
     @Override
-    public void shutdown() {
+    public void shutdownGracefully(long quietPeriod, long timeout, TimeUnit unit) { }
+
+    @Override
+    @Deprecated
+    public void shutdown() { }
+
+    @Override
+    public boolean isShuttingDown() {
+        return false;
     }
 
     @Override
@@ -62,11 +70,6 @@ final class ImmediateEventExecutor extends AbstractEventExecutor {
     }
 
     @Override
-    public List<Runnable> shutdownNow() {
-        return Collections.emptyList();
-    }
-
-    @Override
     public void execute(Runnable command) {
         if (command == null) {
             throw new NullPointerException("command");
@@ -79,8 +82,24 @@ final class ImmediateEventExecutor extends AbstractEventExecutor {
         return new ImmediatePromise<V>(this);
     }
 
+    @Override
+    public <V> ProgressivePromise<V> newProgressivePromise() {
+        return new ImmediateProgressivePromise<V>(this);
+    }
+
     static class ImmediatePromise<V> extends DefaultPromise<V> {
         ImmediatePromise(EventExecutor executor) {
+            super(executor);
+        }
+
+        @Override
+        protected void checkDeadLock() {
+            // No check
+        }
+    }
+
+    static class ImmediateProgressivePromise<V> extends DefaultProgressivePromise<V> {
+        ImmediateProgressivePromise(EventExecutor executor) {
             super(executor);
         }
 

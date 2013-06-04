@@ -23,6 +23,7 @@ import io.netty.util.concurrent.DefaultPromise;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
+import io.netty.util.concurrent.ImmediateEventExecutor;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -235,7 +236,7 @@ final class DefaultChannelGroupFuture extends DefaultPromise<Void> implements Ch
     @Override
     protected void checkDeadLock() {
         EventExecutor e = executor();
-        if (e != null && !(e instanceof DefaultChannelGroup.ImmediateEventExecutor) && e.inEventLoop()) {
+        if (e != null && !(e instanceof ImmediateEventExecutor) && e.inEventLoop()) {
             throw new BlockingOperationException();
         }
     }
