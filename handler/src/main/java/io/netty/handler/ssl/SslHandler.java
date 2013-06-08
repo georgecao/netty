@@ -189,8 +189,6 @@ public class SslHandler
     private volatile long handshakeTimeoutMillis = 10000;
     private volatile long closeNotifyTimeoutMillis = 3000;
 
-    private static final SslHandshakeCompletionEvent HANDSHAKE_SUCCESS_EVENT = new SslHandshakeCompletionEvent(null);
-
     /**
      * Creates a new instance.
      *
@@ -269,7 +267,7 @@ public class SslHandler
     }
 
     public long getCloseNotifyTimeoutMillis() {
-        return handshakeTimeoutMillis;
+        return closeNotifyTimeoutMillis;
     }
 
     public void setCloseNotifyTimeout(long closeNotifyTimeout, TimeUnit unit) {
@@ -908,7 +906,7 @@ public class SslHandler
      */
     private void setHandshakeSuccess() {
         if (handshakePromise.trySuccess(ctx.channel())) {
-            ctx.fireUserEventTriggered(HANDSHAKE_SUCCESS_EVENT);
+            ctx.fireUserEventTriggered(SslHandshakeCompletionEvent.SUCCESS);
         }
     }
 

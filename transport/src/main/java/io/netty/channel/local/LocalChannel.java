@@ -43,11 +43,28 @@ public class LocalChannel extends AbstractChannel {
 
     private static final ChannelMetadata METADATA = new ChannelMetadata(BufType.MESSAGE, false);
 
+    private static final int MAX_READER_STACK_DEPTH = 8;
+    private static final ThreadLocal<Integer> READER_STACK_DEPTH = new ThreadLocal<Integer>() {
+        @Override
+        protected Integer initialValue() {
+            return 0;
+        }
+    };
+
     private final ChannelConfig config = new DefaultChannelConfig(this);
+    private final Runnable readTask = new Runnable() {
+        @Override
+        public void run() {
+            ChannelPipeline pipeline = pipeline();
+            pipeline.fireInboundBufferUpdated();
+            pipeline.fireChannelReadSuspended();
+        }
+    };
+
     private final Runnable shutdownHook = new Runnable() {
         @Override
         public void run() {
-            unsafe().close(unsafe().voidFuture());
+            unsafe().close(unsafe().voidPromise());
         }
     };
 
@@ -198,7 +215,7 @@ public class LocalChannel extends AbstractChannel {
     protected void doClose() throws Exception {
         LocalChannel peer = this.peer;
         if (peer != null && peer.isActive()) {
-            peer.unsafe().close(peer.unsafe().voidFuture());
+            peer.unsafe().close(unsafe().voidPromise());
             this.peer = null;
         }
     }
@@ -206,7 +223,7 @@ public class LocalChannel extends AbstractChannel {
     @Override
     protected Runnable doDeregister() throws Exception {
         if (isOpen()) {
-            unsafe().close(unsafe().voidFuture());
+            unsafe().close(unsafe().voidPromise());
         }
         ((SingleThreadEventExecutor) eventLoop()).removeShutdownHook(shutdownHook);
         return null;
@@ -225,8 +242,18 @@ public class LocalChannel extends AbstractChannel {
             return;
         }
 
-        pipeline.fireInboundBufferUpdated();
-        pipeline.fireChannelReadSuspended();
+        final Integer stackDepth = READER_STACK_DEPTH.get();
+        if (stackDepth < MAX_READER_STACK_DEPTH) {
+            READER_STACK_DEPTH.set(stackDepth + 1);
+            try {
+                pipeline.fireInboundBufferUpdated();
+                pipeline.fireChannelReadSuspended();
+            } finally {
+                READER_STACK_DEPTH.set(stackDepth);
+            }
+        } else {
+            eventLoop().execute(readTask);
+        }
     }
 
     @Override
@@ -277,61 +304,51 @@ public class LocalChannel extends AbstractChannel {
         @Override
         public void connect(final SocketAddress remoteAddress,
                 SocketAddress localAddress, final ChannelPromise promise) {
-            if (eventLoop().inEventLoop()) {
-                if (!ensureOpen(promise)) {
-                    return;
-                }
-
-                if (state == 2) {
-                    Exception cause = new AlreadyConnectedException();
-                    promise.setFailure(cause);
-                    pipeline().fireExceptionCaught(cause);
-                    return;
-                }
-
-                if (connectPromise != null) {
-                    throw new ConnectionPendingException();
-                }
-
-                connectPromise = promise;
-
-                if (state != 1) {
-                    // Not bound yet and no localAddress specified - get one.
-                    if (localAddress == null) {
-                        localAddress = new LocalAddress(LocalChannel.this);
-                    }
-                }
-
-                if (localAddress != null) {
-                    try {
-                        doBind(localAddress);
-                    } catch (Throwable t) {
-                        promise.setFailure(t);
-                        pipeline().fireExceptionCaught(t);
-                        close(voidFuture());
-                        return;
-                    }
-                }
-
-                Channel boundChannel = LocalChannelRegistry.get(remoteAddress);
-                if (!(boundChannel instanceof LocalServerChannel)) {
-                    Exception cause = new ChannelException("connection refused");
-                    promise.setFailure(cause);
-                    close(voidFuture());
-                    return;
-                }
-
-                LocalServerChannel serverChannel = (LocalServerChannel) boundChannel;
-                peer = serverChannel.serve(LocalChannel.this);
-            } else {
-                final SocketAddress localAddress0 = localAddress;
-                eventLoop().execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        connect(remoteAddress, localAddress0, promise);
-                    }
-                });
+            if (!ensureOpen(promise)) {
+                return;
             }
+
+            if (state == 2) {
+                Exception cause = new AlreadyConnectedException();
+                promise.setFailure(cause);
+                pipeline().fireExceptionCaught(cause);
+                return;
+            }
+
+            if (connectPromise != null) {
+                throw new ConnectionPendingException();
+            }
+
+            connectPromise = promise;
+
+            if (state != 1) {
+                // Not bound yet and no localAddress specified - get one.
+                if (localAddress == null) {
+                    localAddress = new LocalAddress(LocalChannel.this);
+                }
+            }
+
+            if (localAddress != null) {
+                try {
+                    doBind(localAddress);
+                } catch (Throwable t) {
+                    promise.setFailure(t);
+                    pipeline().fireExceptionCaught(t);
+                    close(voidPromise());
+                    return;
+                }
+            }
+
+            Channel boundChannel = LocalChannelRegistry.get(remoteAddress);
+            if (!(boundChannel instanceof LocalServerChannel)) {
+                Exception cause = new ChannelException("connection refused");
+                promise.setFailure(cause);
+                close(voidPromise());
+                return;
+            }
+
+            LocalServerChannel serverChannel = (LocalServerChannel) boundChannel;
+            peer = serverChannel.serve(LocalChannel.this);
         }
     }
 }
